@@ -229,7 +229,7 @@ try:
         expand_search_query_concepts,
         is_obvious_nonsense_query,
     )
-        init_gpt_tables(RUNTIME_CACHE_DB_PATH)
+    init_gpt_tables(RUNTIME_CACHE_DB_PATH)
     HAS_GPT_ENRICH = True
     print("[+] GPT-4o-mini token koruma katmanı aktif (cache + kota + otomatik sorgu genişletme).")
 except Exception as e:
