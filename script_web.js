@@ -2365,11 +2365,17 @@ let chartGenreInstance = null;
 /* ==========================================================================
    📌 BAŞLIK: ÇOK SEVİYELİ (BRONZ, GÜMÜŞ, ALTIN, ELMAS) BAŞARIM ROZETLERİ MOTORU
    ========================================================================== */
-let IS_INITIAL_PAGE_LOAD = true;
-
 const UNLOCKED_BADGES_STATE = new Set(
     JSON.parse(localStorage.getItem('matrix_notified_badges') || '[]')
 );
+
+function isLibraryItemFinished(item) {
+    return item && item.status === 'İzledim';
+}
+
+function getFinishedLibraryItems(libData) {
+    return (Array.isArray(libData) ? libData : []).filter(isLibraryItemFinished);
+}
 
 function getBadgeTierInfo(cur, thresholds) {
     if (cur < thresholds.bronz) {
@@ -2425,25 +2431,27 @@ function getBadgeTierInfo(cur, thresholds) {
     }
 }
 
-function renderBadges() {
+function renderBadges(options = {}) {
+    const notifyNewBadges = options.notify === true;
     const badgesContainer = document.getElementById('badges-container');
     if (!badgesContainer) return;
 
     const libData = getActiveLibrary();
+    const finishedItems = getFinishedLibraryItems(libData);
     const isMovie = (currentUniverse === 'MOVIES');
 
-    // Metrikleri dinamik hesapla
-    const finishedCount = libData.filter(i => i.status === 'İzledim').length;
+    // Metrikleri dinamik hesapla — platform/tür rozetleri yalnızca bitirilen yapımlardan sayılır
+    const finishedCount = finishedItems.length;
     const ratedCount = libData.filter(i => (i.user_rating || 0) > 0).length;
     
     let totalWatchedMins = 0;
     libData.forEach(item => {
-        const epMins = item.ep_duration || 45;
+        const epMins = item.ep_duration || (isMovie ? 120 : 45);
         if (item.status === 'İzledim') {
             const map = item.season_episodes_map || [10];
-            const totalEps = item.total_episodes || map.reduce((a, b) => a + b, 0);
+            const totalEps = isMovie ? 1 : (item.total_episodes || map.reduce((a, b) => a + b, 0));
             totalWatchedMins += totalEps * epMins;
-        } else if (item.status === 'İzliyorum' || (item.current_episode || 0) > 0 || (item.current_season || 1) > 1) {
+        } else if (!isMovie && (item.status === 'İzliyorum' || (item.current_episode || 0) > 0 || (item.current_season || 1) > 1)) {
             const curS = item.current_season || 1;
             const curE = item.current_episode || 0;
             const map = item.season_episodes_map || [10];
@@ -2456,14 +2464,14 @@ function renderBadges() {
 
     const totalHours = Math.floor(totalWatchedMins / 60);
 
-    const netflixCount = libData.filter(i => (i.platform || '').includes('Netflix')).length;
-    const primeCount = libData.filter(i => (i.platform || '').includes('Prime') || (i.platform || '').includes('Amazon')).length;
-    const disneyCount = libData.filter(i => (i.platform || '').includes('Disney')).length;
-    const dramCount = libData.filter(i => (i.genres || []).includes('Dram')).length;
-    const sciFiCount = libData.filter(i => (i.genres || []).some(g => g.includes('Bilim') || g.includes('Gizem') || g.includes('Fantastik'))).length;
-    const comedyCount = libData.filter(i => (i.genres || []).includes('Komedi')).length;
-    const crimeCount = libData.filter(i => (i.genres || []).some(g => g.includes('Suç') || g.includes('Polisiye') || g.includes('Gerilim'))).length;
-    const gemCount = libData.filter(i => (i.votes_num && i.votes_num >= 200 && i.votes_num <= 400)).length || (finishedCount > 0 ? 1 : 0);
+    const netflixCount = finishedItems.filter(i => (i.platform || '').includes('Netflix')).length;
+    const primeCount = finishedItems.filter(i => (i.platform || '').includes('Prime') || (i.platform || '').includes('Amazon')).length;
+    const disneyCount = finishedItems.filter(i => (i.platform || '').includes('Disney')).length;
+    const dramCount = finishedItems.filter(i => (i.genres || []).includes('Dram')).length;
+    const sciFiCount = finishedItems.filter(i => (i.genres || []).some(g => g.includes('Bilim') || g.includes('Gizem') || g.includes('Fantastik'))).length;
+    const comedyCount = finishedItems.filter(i => (i.genres || []).includes('Komedi')).length;
+    const crimeCount = finishedItems.filter(i => (i.genres || []).some(g => g.includes('Suç') || g.includes('Polisiye') || g.includes('Gerilim'))).length;
+    const gemCount = finishedItems.filter(i => i.votes_num && i.votes_num >= 200 && i.votes_num <= 400).length;
 
     let rawBadgesList = [];
 
@@ -2474,9 +2482,9 @@ function renderBadges() {
                 id: "movie_total",
                 faIcon: "fa-solid fa-film",
                 title: "Sinema Perdesi",
-                desc: "İzlediğin toplam film sayısı",
+                desc: "Bitirdiğin toplam film sayısı",
                 cur: finishedCount,
-                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 100 }
+                thresholds: { bronz: 1, gumus: 15, altin: 50, elmas: 150 }
             },
             {
                 id: "movie_hours",
@@ -2484,31 +2492,31 @@ function renderBadges() {
                 title: "Maratoncu",
                 desc: "Toplam film izleme süresi (Saat)",
                 cur: totalHours,
-                thresholds: { bronz: 2, gumus: 10, altin: 50, elmas: 150 }
+                thresholds: { bronz: 10, gumus: 50, altin: 200, elmas: 600 }
             },
             {
                 id: "movie_netflix",
                 faIcon: "fa-solid fa-clapperboard",
                 title: "Netflix Sineması",
-                desc: "İzlenen Netflix filmleri",
+                desc: "Bitirdiğin Netflix filmleri",
                 cur: netflixCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_prime",
                 faIcon: "fa-solid fa-gift",
                 title: "Prime Sinema Kulübü",
-                desc: "İzlenen Amazon Prime filmleri",
+                desc: "Bitirdiğin Amazon Prime filmleri",
                 cur: primeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_disney",
                 faIcon: "fa-solid fa-fort-awesome",
                 title: "Disney Vizyonu",
-                desc: "İzlenen Disney+ filmleri",
+                desc: "Bitirdiğin Disney+ filmleri",
                 cur: disneyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_gems",
@@ -2516,39 +2524,39 @@ function renderBadges() {
                 title: "Gizli Vizyoner",
                 desc: "Popüler olmayan (200-400 oy) film yapımlarını keşfetme",
                 cur: gemCount,
-                thresholds: { bronz: 1, gumus: 3, altin: 10, elmas: 25 }
+                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 35 }
             },
             {
                 id: "movie_drama",
                 faIcon: "fa-solid fa-masks-theater",
                 title: "Dram Kuşağı",
-                desc: "İzlenen dram filmleri",
+                desc: "Bitirdiğin dram filmleri",
                 cur: dramCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_scifi",
                 faIcon: "fa-solid fa-rocket",
                 title: "Bilimkurgu Evreni",
-                desc: "İzlenen bilimkurgu/fantastik filmler",
+                desc: "Bitirdiğin bilimkurgu/fantastik filmler",
                 cur: sciFiCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_comedy",
                 faIcon: "fa-solid fa-face-laugh-beam",
                 title: "Sinema Komedisi",
-                desc: "İzlenen komedi filmleri",
+                desc: "Bitirdiğin komedi filmleri",
                 cur: comedyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_thriller",
                 faIcon: "fa-solid fa-user-secret",
                 title: "Gerilim & Suç",
-                desc: "İzlenen suç/gerilim/polisiye filmleri",
+                desc: "Bitirdiğin suç/gerilim/polisiye filmleri",
                 cur: crimeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_critic",
@@ -2556,7 +2564,7 @@ function renderBadges() {
                 title: "Film Eleştirmeni",
                 desc: "Puan verdiğin film sayısı",
                 cur: ratedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_social",
@@ -2590,9 +2598,9 @@ function renderBadges() {
                 id: "series_total",
                 faIcon: "fa-solid fa-desktop",
                 title: "Ekran Bağımlısı",
-                desc: "İzlediğin toplam dizi sayısı",
+                desc: "Bitirdiğin toplam dizi sayısı",
                 cur: finishedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 20, elmas: 50 }
+                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
             },
             {
                 id: "series_hours",
@@ -2600,31 +2608,31 @@ function renderBadges() {
                 title: "Koltuk Patatesi",
                 desc: "Toplam izleme süresi (Saat)",
                 cur: totalHours,
-                thresholds: { bronz: 3, gumus: 20, altin: 100, elmas: 300 }
+                thresholds: { bronz: 10, gumus: 50, altin: 250, elmas: 3500 }
             },
             {
                 id: "series_netflix",
                 faIcon: "fa-solid fa-clapperboard",
                 title: "Netflix Gurmesi",
-                desc: "İzlenen Netflix dizileri",
+                desc: "Bitirdiğin Netflix dizileri",
                 cur: netflixCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_prime",
                 faIcon: "fa-solid fa-gift",
                 title: "Prime Seçici",
-                desc: "İzlenen Prime Video dizileri",
+                desc: "Bitirdiğin Prime Video dizileri",
                 cur: primeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_disney",
                 faIcon: "fa-solid fa-fort-awesome",
                 title: "Disney Seyyahı",
-                desc: "İzlenen Disney Plus dizileri",
+                desc: "Bitirdiğin Disney Plus dizileri",
                 cur: disneyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_gems",
@@ -2632,39 +2640,39 @@ function renderBadges() {
                 title: "Gizli Cevher Avcısı",
                 desc: "Popüler olmayan (200-400 oy) dizileri keşfetme",
                 cur: gemCount,
-                thresholds: { bronz: 1, gumus: 3, altin: 10, elmas: 20 }
+                thresholds: { bronz: 1, gumus: 2, altin: 5, elmas: 12 }
             },
             {
                 id: "series_drama",
                 faIcon: "fa-solid fa-masks-theater",
                 title: "Dram Sever",
-                desc: "İzlenen dram dizileri",
+                desc: "Bitirdiğin dram dizileri",
                 cur: dramCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_scifi",
                 faIcon: "fa-solid fa-rocket",
                 title: "Bilimkurgu Kaşifi",
-                desc: "İzlenen bilimkurgu/gizem dizileri",
+                desc: "Bitirdiğin bilimkurgu/gizem dizileri",
                 cur: sciFiCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_comedy",
                 faIcon: "fa-solid fa-face-laugh-beam",
                 title: "Kahkaha Makinesi",
-                desc: "İzlenen komedi dizileri",
+                desc: "Bitirdiğin komedi dizileri",
                 cur: comedyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_thriller",
                 faIcon: "fa-solid fa-user-secret",
                 title: "Suç Ortağı",
-                desc: "İzlenen suç/polisiye dizileri",
+                desc: "Bitirdiğin suç/polisiye dizileri",
                 cur: crimeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_social",
@@ -2680,7 +2688,7 @@ function renderBadges() {
                 title: "Kritik Zihin",
                 desc: "Puan verdiğin dizi sayısı",
                 cur: ratedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 5, altin: 12, elmas: 25 }
             },
             {
                 id: "series_collector",
@@ -2710,7 +2718,7 @@ function renderBadges() {
             if (!UNLOCKED_BADGES_STATE.has(unlockKey)) {
                 UNLOCKED_BADGES_STATE.add(unlockKey);
                 localStorage.setItem('matrix_notified_badges', JSON.stringify(Array.from(UNLOCKED_BADGES_STATE)));
-                if (!IS_INITIAL_PAGE_LOAD) {
+                if (notifyNewBadges) {
                     showBadgeToast(b.title, tierInfo.tier, b.faIcon);
                 }
             }
@@ -2845,7 +2853,7 @@ function renderDistributionCharts() {
 // --------------------------------------------------------------------------
 // 4. KİTAPLIK UI GÜNCELLEMESİ VE DATALIST DOLDURMA
 // --------------------------------------------------------------------------
-function updateLibraryUI() {
+function updateLibraryUI(options = {}) {
     window._libraryNeedsRefresh = false;
     const statWatchTime = document.getElementById('stat-watch-time');
     const statMediaCount = document.getElementById('stat-media-count');
@@ -2930,7 +2938,7 @@ function updateLibraryUI() {
         });
     }
 
-    renderBadges();
+    renderBadges({ notify: options.notifyBadges === true });
     renderDistributionCharts();
     renderLibraryCards();
 
@@ -3421,7 +3429,7 @@ function incrementEpisode(itemId) {
     } else {
         item.status = "İzledim";
         showToast(`🎉 ${item.title} dizisinin tüm sezon ve bölümlerini tamamladınız!`, 2000);
-        updateLibraryUI();
+        updateLibraryUI({ notifyBadges: true });
         return;
     }
 
@@ -3454,7 +3462,7 @@ function markAsFinished(itemId) {
 
         showToast(`🎉 <strong>${item.title}</strong> tamamlandı! (S${item.current_season} B${item.current_episode})`, 2000);
     }
-    updateLibraryUI();
+    updateLibraryUI({ notifyBadges: true });
 }
 
 function stepSeason(itemId, delta) {
@@ -3529,6 +3537,7 @@ function saveEditPanel(itemId) {
     const starBox = document.getElementById(`star-rating-box-${itemId}`);
 
     const isMovie = (currentUniverse === 'MOVIES');
+    const previousStatus = item.status;
 
     if (!isMovie) {
         const map = item.season_episodes_map || [10];
@@ -3578,7 +3587,8 @@ function saveEditPanel(itemId) {
     if (popover) popover.style.display = 'none';
 
     showToast(`✅ <strong>${item.title}</strong> güncellendi!`, 1800);
-    updateLibraryUI();
+    const earnedNewBadge = item.status === 'İzledim' && previousStatus !== 'İzledim';
+    updateLibraryUI({ notifyBadges: earnedNewBadge });
 }
 
 function toggleFavorite(itemId) {
@@ -3990,7 +4000,7 @@ function handleSaveManualEntry() {
     if (inputSearch) inputSearch.value = '';
     const resultsDiv = document.getElementById('manual-search-results');
     if (resultsDiv) resultsDiv.style.display = 'none';
-    updateLibraryUI();
+    updateLibraryUI({ notifyBadges: finalStatus === 'İzledim' });
 }
 
 function setupLibraryListeners() {
@@ -8915,7 +8925,4 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSocialUI();
     renderAIRecommenderUI();
     checkSavedSession();
-    setTimeout(() => {
-        IS_INITIAL_PAGE_LOAD = false;
-    }, 1200);
 });
