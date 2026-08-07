@@ -51,6 +51,14 @@ def turso_configured() -> bool:
     return bool(url and token and url.startswith(("libsql://", "https://")))
 
 
+def turso_http_url(url: str | None = None) -> str:
+    """libsql:// bazı ortamlarda WSS 400 veriyor; HTTPS Hrana daha stabil."""
+    u = (url or os.environ.get("TURSO_DATABASE_URL") or "").strip()
+    if u.startswith("libsql://"):
+        return "https://" + u[len("libsql://") :]
+    return u
+
+
 class _TursoCursor:
     def __init__(self, client):
         self._client = client
@@ -128,7 +136,7 @@ def _get_turso_client():
     import libsql_client
 
     _turso_client = libsql_client.create_client_sync(
-        url=os.environ["TURSO_DATABASE_URL"].strip(),
+        url=turso_http_url(),
         auth_token=os.environ["TURSO_AUTH_TOKEN"].strip(),
     )
     return _turso_client

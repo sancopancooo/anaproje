@@ -46,7 +46,6 @@ def api(token: str, method: str, url: str, body: dict | None = None):
             return r.status, json.loads(raw.decode("utf-8")) if raw else {}
     except urllib.error.HTTPError as e:
         err = e.read().decode("utf-8", errors="replace")[:800]
-        # Never echo Authorization / tokens
         raise RuntimeError(f"HTTP {e.code}: {err}") from None
 
 
@@ -58,12 +57,12 @@ def main() -> int:
 
     try:
         from dulwich import porcelain
+        from dulwich.client import HttpGitClient
         from dulwich.repo import Repo
     except ImportError:
         print("[!] dulwich yok: pip install dulwich")
         return 2
 
-    # Quick secret scan before push
     bad = []
     for p in ROOT.rglob("*.py"):
         if ".git" in p.parts or "venv" in p.parts:
@@ -72,7 +71,6 @@ def main() -> int:
             txt = p.read_text(encoding="utf-8", errors="ignore")
         except Exception:
             continue
-        # Scan for Groq-style keys without embedding a real secret
         if re.search(r"gs" + r"k_[A-Za-z0-9]{20,}", txt):
             bad.append(str(p.relative_to(ROOT)))
     if bad:
@@ -82,47 +80,50 @@ def main() -> int:
         return 2
 
     repo = Repo(str(ROOT))
-    head = repo.refs[b"refs/heads/master"].decode("ascii")
-    print(f"[+] Local master: {head[:12]}")
+    head = repo.refs[b"refs/heads/master"]
+    print(f"[+] Local master: {head.decode('ascii')[:12]}")
 
     _, repo_info = api(token, "GET", "https://api.github.com/repos/sancopancooo/anaproje")
-    default_branch = repo_info.get("default_branch") or "main"
-    print(f"[+] Remote default: {default_branch}")
+    print(f"[+] Remote default: {repo_info.get('default_branch') or 'main'}")
 
-    # Auth via callback — token never appears in remote URL / error strings
-    def get_creds(*_args, **_kwargs):
-        return ("x-access-token", token)
+    client = HttpGitClient(
+        "https://github.com/sancopancooo/anaproje/",
+        username="x-access-token",
+        password=token,
+    )
 
-    print("[+] dulwich push master:main (force)...")
+    def update_refs(refs):
+        # Force update main to local master tip
+        new_refs = dict(refs)
+        new_refs[b"refs/heads/main"] = head
+        return new_refs
+
+    print("[+] send_pack master -> main (force)...")
     try:
-        porcelain.push(
-            str(ROOT),
-            "https://github.com/sancopancooo/anaproje.git",
-            refspecs=[b"+refs/heads/master:refs/heads/main"],
-            get_credentials=get_creds,
+        client.send_pack(
+            "sancopancooo/anaproje",
+            update_refs,
+            repo.generate_pack_data,
         )
-    except TypeError:
-        # Older dulwich: username/password in URL but redact on error
-        remote = (
-            "https://x-access-token:"
-            + quote(token, safe="")
-            + "@github.com/sancopancooo/anaproje.git"
-        )
+    except Exception as e:
+        msg = str(e).replace(token, "***")
+        # Fallback: porcelain with redacted error
         try:
+            remote = (
+                "https://x-access-token:"
+                + quote(token, safe="")
+                + "@github.com/sancopancooo/anaproje.git"
+            )
             porcelain.push(
                 str(ROOT),
                 remote,
                 refspecs=[b"+refs/heads/master:refs/heads/main"],
             )
-        except Exception as e:
-            msg = str(e)
-            msg = msg.replace(token, "***")
-            print(f"[!] Push failed: {type(e).__name__}: {msg[:500]}")
+        except Exception as e2:
+            msg2 = str(e2).replace(token, "***")
+            print(f"[!] Push failed: {type(e).__name__}: {msg[:300]}")
+            print(f"[!] Fallback failed: {type(e2).__name__}: {msg2[:500]}")
             return 1
-    except Exception as e:
-        msg = str(e).replace(token, "***")
-        print(f"[!] Push failed: {type(e).__name__}: {msg[:500]}")
-        return 1
 
     _, after = api(
         token,

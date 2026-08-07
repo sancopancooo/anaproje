@@ -50,8 +50,11 @@ def main() -> int:
 
     import libsql_client
 
+    # libsql:// → wss bazen 400; https Hrana daha güvenilir
+    http_url = url.replace("libsql://", "https://", 1) if url.startswith("libsql://") else url
+
     kaynak = sqlite3.connect(str(local))
-    hedef = libsql_client.create_client_sync(url=url, auth_token=token)
+    hedef = libsql_client.create_client_sync(url=http_url, auth_token=token)
 
     tablolar = [
         r[0]
