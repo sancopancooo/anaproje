@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: anaproje-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python start_server.py
+    envVars:
+      - key: HF_DATASET_REPO
+        value: sancopancoo/dizimibul-embeddings
+      - key: CATALOG_DB_PATH
+        value: katalog.db
+      - key: CORS_ORIGINS
+        value: https://sancopancooo.github.io
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: SERVER_SECRET_KEY
+        generateValue: true

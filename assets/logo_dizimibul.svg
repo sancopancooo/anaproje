@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="diziGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+    <filter id="glowDizi" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Glow Circle -->
+  <circle cx="50" cy="50" r="46" fill="rgba(59, 130, 246, 0.15)" stroke="url(#diziGrad)" stroke-width="1.5" />
+
+  <!-- TV Stand Base -->
+  <path d="M 40 76 L 60 76 L 66 85 L 34 85 Z" fill="url(#diziGrad)" />
+
+  <!-- TV Screen Frame -->
+  <rect x="16" y="26" width="68" height="48" rx="10" fill="#050a12" stroke="url(#diziGrad)" stroke-width="3" filter="url(#glowDizi)" />
+
+  <!-- Antenna Rays -->
+  <line x1="38" y1="26" x2="26" y2="12" stroke="#00f0ff" stroke-width="3" stroke-linecap="round" />
+  <line x1="62" y1="26" x2="74" y2="12" stroke="#00f0ff" stroke-width="3" stroke-linecap="round" />
+  <circle cx="26" cy="12" r="3" fill="#00f0ff" />
+  <circle cx="74" cy="12" r="3" fill="#00f0ff" />
+
+  <!-- AI Circuit Nodes on Right Side -->
+  <path d="M 54 38 L 68 38 L 74 44" fill="none" stroke="#00f0ff" stroke-width="2" stroke-linecap="round" />
+  <circle cx="74" cy="44" r="2.5" fill="#00f0ff" />
+
+  <path d="M 54 54 L 64 54 L 70 60" fill="none" stroke="#00f0ff" stroke-width="2" stroke-linecap="round" />
+  <circle cx="70" cy="60" r="2.5" fill="#00f0ff" />
+
+  <!-- Play Symbol inside TV screen -->
+  <polygon points="36,37 36,61 54,49" fill="url(#diziGrad)" />
+</svg>

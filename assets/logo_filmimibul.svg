@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="filmGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316" />
+      <stop offset="100%" stop-color="#dc2626" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f97316" />
+    </linearGradient>
+    <filter id="glowFilm" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Glow Circle -->
+  <circle cx="50" cy="50" r="46" fill="rgba(220, 38, 38, 0.15)" stroke="url(#filmGrad)" stroke-width="1.5" />
+
+  <!-- Outer Orbital Ring -->
+  <ellipse cx="50" cy="52" rx="42" ry="22" fill="none" stroke="url(#goldGrad)" stroke-width="3.5" transform="rotate(-22 50 52)" filter="url(#glowFilm)" opacity="0.95" />
+
+  <!-- Camera Body Box -->
+  <rect x="22" y="38" width="38" height="28" rx="6" fill="url(#filmGrad)" stroke="#fbbf24" stroke-width="1.5" />
+  
+  <!-- Lens Cone -->
+  <polygon points="60,44 76,35 76,69 60,60" fill="url(#filmGrad)" stroke="#fbbf24" stroke-width="1.5" />
+
+  <!-- Film Reels on Top -->
+  <circle cx="33" cy="29" r="9" fill="#120505" stroke="url(#goldGrad)" stroke-width="2.5" />
+  <circle cx="33" cy="29" r="3" fill="#fbbf24" />
+  
+  <circle cx="51" cy="29" r="9" fill="#120505" stroke="url(#goldGrad)" stroke-width="2.5" />
+  <circle cx="51" cy="29" r="3" fill="#fbbf24" />
+
+  <!-- Play Symbol inside lens -->
+  <polygon points="37,45 37,59 50,52" fill="#ffffff" />
+</svg>

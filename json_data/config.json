@@ -1,0 +1,56 @@
+{
+  "KELIME_KOK_VE_VARYASYONLARI": {
+    "kasaba": [
+      "kasaba", "köy", "şehir", "kent", "belediye", "kahvehanesi", "polis karakolu", 
+      "kahve", "mahkeme", "eskiden", "gurbetçi", "yerel", "yerel halk",
+      "yerel sorunlar", "kahve dükkanı", "belediye başkanı", "kahve bahçesi", 
+      "sokak sohbeti", "kahve muhabbeti", "banliyö", "taşra", "küçük topluluk", 
+      "izole yaşam", "sakin şehir", "sırlarla dolu kasaba"
+    ],
+    "şehir": ["şehir", "metropol", "metro", "iş", "mafya", "polis", "cenaz", "cenaze", "sokak", "sokaklar", "sokaklaşma"],
+    "zeki": [
+      "zeki", "akıllı", "hacker", "doktor", "profesör", "dedektif", "astronot", 
+      "bilim insanı", "gén", "mükemmel", "başarı", "yüksek", "iq", "kurnaz", 
+      "zeki adam", "şaşkın", "analist", "mantıklı", "stratejik", "lateral düşünür", 
+      "dedektif ruhu", "deha", "dahi", "analitik", "üstün zeka", "problem çözücü", 
+      "stratejist", "plan kurucu", "keskin zekalı"
+    ],
+    "savaş": ["savaş", "çatışma", "dövüş", "vurulmak", "polis", "müsad", "güç", "krallık", "tazilla", "kurtuluş", "mücadele", "direniş", "komutan", "general", "bombalı", "itfaiyeci", "itfaiye"],
+    "politik": ["politik", "başkan", "ilişki", "devlet", "siyaset", "meclis", "sekreter", "muhtar", "hukuk", "özgür", "özgürlük", "mücadele", "yolsuzluk", "darbe", "memur", "bakan"],
+    "dram": [
+      "dram", "dramatik", "aşk", "yoksulluk", "acı", "hüzün", "aile problemi", "anne", 
+      "baba", "çocuk", "çocuk hakları", "yoksul", "umutsuz", "umut", "sevda", "gam", 
+      "gam yeme", "gam yemek", "kalpteki çırpınım", "aşk acısı", "gözyaşı", 
+      "hayatın zorlukları", "aile trajedisi", "melankoli", "duygusal yıkım", 
+      "ayrılık acısı", "vicdan azabı", "insan ilişkileri", "yaşam mücadelesi", "psikolojik derinlik"
+    ],
+    "bilim": ["bilim", "robot", "uzay", "zaman", "dünya", "gezegen", "evren", "cumhur", "mühendis", "laboratuvar", "deney", "deney yapmak", "uzay gemisi", "galaksi", "güneş", "jupiter", "mars", "mers", "mersis", "mersisler"],
+    "gizem": ["gizem", "gizemli", "sır", "şifre", "buluş", "kayıp", "kaybolmak", "kayıp child", "görülmeyen", "görünmez", "gizli", "gizli ajan", "gizli şehit", "suç", "cinayet", "ölüm", "katil", "kahve", "kahve muhasebesi"],
+    "aşk": ["aşk", "romantik", "sevgi", "kalp", "aşık", "aşkın", "sevgililer", "ilişki", "flört", "kıskanç", "kıskançlık", "sevgi çocuğu", "sevgi uğruna"],
+    "komedi": ["komedi", "komik", "gülmek", "espri", "sinir", "sinir bozukluğu", "mental", "deli", "deliliğin", "deli dükkanı", "güldür", "güldürmek"],
+    "aile": ["aile", "anne", "baba", "çocuk", "torun", "dede", "nine", "amca", "amca bacı", "babaanne", "dedeanne", "kardeş", "erkek kardeş", "kız kardeş", "oda", "odalar"],
+    "uzay gemisi": [
+      "uzay gemisi", "uzay", "galaxi", "zaman yolculuğu", "robot", "astronot", "fırlatma",
+      "galaksi", "güneş", "jupiter", "mars", "apollo", "uzaydışı", "gezegen", "yerçekimi"
+    ],
+    "karakter odaklı": [
+      "karakter", "psikoloji", "kişilik", "derinlik", "dönüşüm", "ruh hali",
+      "içsel mücadele", "ruhsal", "duygusal yolculuk", "kişisel gelişim", "psikolojik"
+    ]
+  },
+  "ATMOSPHERE_ESLESME": {
+    "kasaba": ["Dram", "Aksiyon & Macera", "Suç", "Gizem"],
+    "şehir": ["Suç", "Aksiyon & Macera", "Dram", "Politik"],
+    "zeki": ["Suç", "Bilim Kurgu & Fantastik", "Gizem", "Dram"],
+    "politik": ["Dram", "Suç", "Aksiyon & Macera", "Gizem"],
+    "dram": ["Dram", "Aile", "Suç"],
+    "savaş": ["Aksiyon & Macera", "Savaş & Politik", "Dram"],
+    "bilim": ["Bilim Kurgu & Fantastik", "Dram"],
+    "gizem": ["Gizem", "Suç", "Dram"],
+    "aşk": ["Aşk", "Aile", "Dram"],
+    "komedi": ["Komedi", "Aile"],
+    "uzay gemisi": ["Bilim Kurgu & Fantastik"],
+    "karakter odaklı": ["Dram", "Gizem"],
+    "dizi bazlı referans": ["Tüm Türler"]
+  }
+}
