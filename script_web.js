@@ -161,7 +161,8 @@ function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = String(item.poster_url || item.afis_url || '').trim();
     if (!raw) return TMDB_POSTER_FALLBACK;
-    return optimizeTmdbPosterUrl(raw);
+    // TR ağlarında image.tmdb.org sık engellendiği için güvenilir weserv aynasını döndür
+    return buildPosterCandidates(raw).primary || optimizeTmdbPosterUrl(raw);
 }
 
 window.__posterImgError = function (img) {
@@ -204,15 +205,30 @@ window.__posterImgError = function (img) {
 };
 
 /**
- * Kart afişleri: TMDB → weserv → Render proxy → placeholder.
+ * Afiş kaynak sırası. TR ağlarında image.tmdb.org sık engellendiği/yavaşladığı
+ * için güvenilir weserv aynası BİRİNCİL yapılır; ardından kendi proxy ve en son
+ * direkt TMDB denenir.
+ */
+function buildPosterCandidates(rawUrl) {
+    const resolved = String(rawUrl || '').trim() || TMDB_POSTER_FALLBACK;
+    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
+    const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
+    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
+    const tmdbDirect = (direct && isTmdbImageHost(direct)) ? direct : '';
+    const ordered = [...new Set([weserv, proxy, tmdbDirect, resolved].filter(Boolean))];
+    return {
+        primary: ordered[0] || resolved,
+        mirror: ordered[1] || '',
+        proxy: ordered[2] || ''
+    };
+}
+
+/**
+ * Kart afişleri: weserv → Render proxy → direkt TMDB → placeholder.
  * Çift sarmalama yok; & attribute kaçışı safeImageSrc ile.
  */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
-    const resolved = url || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
-    const primary = (direct && isTmdbImageHost(direct)) ? direct : resolved;
-    const mirror = direct ? toWeservTmdbUrl(direct, 'w342') : '';
-    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
+    const { primary, mirror, proxy } = buildPosterCandidates(url);
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
     return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
@@ -6362,13 +6378,14 @@ function openItemDetailModal(itemId) {
         posterElem.onerror = function () { window.__posterImgError(this); };
         delete posterElem.dataset.triedMirror;
         delete posterElem.dataset.triedProxy;
-        const rawPoster = String(item.poster_url || item.afis_url || '').trim();
-        const directPoster = toDirectTmdbUrl(rawPoster, 'w342') || rawPoster;
-        posterElem.setAttribute('data-mirror', toWeservTmdbUrl(directPoster, 'w342') || '');
-        posterElem.setAttribute('data-proxy', toProxiedTmdbUrl(directPoster, 'w342') || '');
+        delete posterElem.dataset.retryCount;
+        const cand = buildPosterCandidates(item.poster_url || item.afis_url);
+        posterElem.setAttribute('data-primary', cand.primary);
+        posterElem.setAttribute('data-mirror', cand.mirror);
+        posterElem.setAttribute('data-proxy', cand.proxy);
         posterElem.setAttribute('data-fallback', TMDB_POSTER_FALLBACK);
         posterElem.removeAttribute('data-direct');
-        posterElem.src = resolvePosterUrl(item);
+        posterElem.src = cand.primary;
     }
     if (titleElem) titleElem.textContent = item.title;
 
