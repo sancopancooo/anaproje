@@ -113,31 +113,23 @@ function warmPosterProxy() {
     img.src = `${api}/api/tmdb-image?size=w92&path=${encodeURIComponent('/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg')}`;
 }
 
-function preloadImages(urls, timeoutMs = 8000) {
-    const list = [...new Set((urls || []).filter(Boolean))];
-    if (!list.length) return Promise.resolve();
-    return new Promise((resolve) => {
-        let left = list.length;
-        let settled = false;
-        const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve();
-        };
-        const timer = setTimeout(finish, timeoutMs);
-        list.forEach((url) => {
-            const img = new Image();
-            const one = () => {
-                left -= 1;
-                if (left <= 0) finish();
-            };
-            img.onload = one;
-            img.onerror = one;
-            img.referrerPolicy = 'no-referrer';
-            img.src = url;
-        });
-    });
+/** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
+function resetExploreCardsForUniverseSwitch() {
+    _renderCardsToken += 1;
+    currentPage = 1;
+    if (_renderCardsDebounceTimer) {
+        clearTimeout(_renderCardsDebounceTimer);
+        _renderCardsDebounceTimer = null;
+    }
+    const cardsContainer = document.getElementById('cards-container');
+    const resultsCountText = document.getElementById('results-count-text');
+    if (cardsContainer) {
+        cardsContainer.innerHTML = `
+            <div style="grid-column:1/-1;text-align:center;padding:28px 12px;color:#9ca3af;font-weight:700;">
+                Liste yenileniyor…
+            </div>`;
+    }
+    if (resultsCountText) resultsCountText.textContent = 'Liste yenileniyor…';
 }
 
 function isMainAppVisible() {
@@ -909,6 +901,10 @@ function setUniverse(universe) {
             : 'Kitaplığında dizi ara...';
     }
 
+    currentPage = 1;
+    // Eski evren kartlarını hemen sil — film/dizi karışmasını engeller
+    resetExploreCardsForUniverseSwitch();
+
     // Landing'deyken ağır render yapma — giriş ekranı donmasın
     if (!isMainAppVisible()) {
         window._exploreNeedsRefresh = true;
@@ -929,9 +925,13 @@ function setUniverse(universe) {
     resetFusionUI();
     renderFeedbackUI();
 
-    if (typeof generateAIRecommendations === 'function') {
+    // AI sekmesi açık değilken ağır tavsiye üretimini ertele
+    const aiTab = document.getElementById('tab-recommender');
+    if (aiTab && aiTab.classList.contains('active') && typeof generateAIRecommendations === 'function') {
         syncAIOngoingPrefUI();
         generateAIRecommendations();
+    } else if (typeof syncAIOngoingPrefUI === 'function') {
+        syncAIOngoingPrefUI();
     }
 }
 
@@ -2031,15 +2031,15 @@ function scheduleRenderContentCards(immediate = false) {
     }
 }
 
-async function renderContentCards() {
+function renderContentCards() {
     window._exploreNeedsRefresh = false;
     const cardsContainer = document.getElementById('cards-container');
     const resultsCountText = document.getElementById('results-count-text');
     if (!cardsContainer) return;
     const renderToken = ++_renderCardsToken;
+    const universeSnapshot = currentUniverse;
 
-
-    const dataset = (currentUniverse === 'MOVIES') 
+    const dataset = (universeSnapshot === 'MOVIES') 
         ? ((typeof REAL_MOVIES_DATA !== 'undefined') ? REAL_MOVIES_DATA : SAMPLE_MOVIES)
         : ((typeof REAL_SERIES_DATA !== 'undefined') ? REAL_SERIES_DATA : SAMPLE_SERIES);
 
@@ -2104,14 +2104,14 @@ async function renderContentCards() {
         // Kitaplık değişince cache bozulsun
         const libCacheSig = [...userLibIds].sort().join(',').slice(0, 200);
         // v6: zombi undead tuzağı + aramaya özel AI notu
-        const cacheKey = `v6_${currentUniverse}_${activeSearchQuery.toLowerCase().trim()}_${libCacheSig}`;
+        const cacheKey = `v6_${universeSnapshot}_${activeSearchQuery.toLowerCase().trim()}_${libCacheSig}`;
         let backendData = window.BACKEND_SEARCH_CACHE[cacheKey];
 
         if (backendData === undefined || backendData === 'LOADING') {
             if (backendData === undefined) {
                 window.BACKEND_SEARCH_CACHE[cacheKey] = 'LOADING';
                 // Arka planda sürer; kullanıcı başka sekmeye geçebilir
-                searchViaBackend(activeSearchQuery, currentUniverse).then(data => {
+                searchViaBackend(activeSearchQuery, universeSnapshot).then(data => {
                     window.BACKEND_SEARCH_CACHE[cacheKey] = data;
                     // Keşfet görünür olsun/olmasın sonuçları hazırla
                     const exploreTab = document.getElementById('tab-explore');
@@ -2133,7 +2133,7 @@ async function renderContentCards() {
                 resultsCountText.textContent = 'Semantik arama sürüyor…';
             }
 
-            const mediaWord = currentUniverse === 'MOVIES' ? 'filmler' : 'diziler';
+            const mediaWord = universeSnapshot === 'MOVIES' ? 'filmler' : 'diziler';
             cardsContainer.innerHTML = `
                 <div style="grid-column: 1 / -1; background: rgba(22, 18, 42, 0.95); border: 2px dashed #06b6d4; border-radius: 20px; padding: 45px 20px; text-align: center; box-shadow: 0 0 35px rgba(6, 182, 212, 0.3);">
                     <div style="width: 58px; height: 58px; border: 4px solid rgba(6, 182, 212, 0.2); border-top-color: #06b6d4; border-right-color: #3b82f6; border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto 18px;"></div>
@@ -2314,22 +2314,15 @@ async function renderContentCards() {
         return;
     }
 
-    // Kapakları önce paralel yükle — kartlar hazır gelince birden çizilir (tek tek akmaz)
-    const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
-    if (!cardsContainer.querySelector('.media-horizontal-card')) {
-        cardsContainer.innerHTML = `
-            <div style="grid-column:1/-1;text-align:center;padding:28px 12px;color:#9ca3af;font-weight:700;">
-                Kapaklar yükleniyor…
-            </div>`;
-    }
-    await preloadImages(posterUrls, 7000);
-    if (renderToken !== _renderCardsToken) return;
+    // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
+    if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
     cardsContainer.innerHTML = '';
 
-    // 4. Kartların DOM'a Eklenmesi (çok kartta backdrop kapalı — performans)
-    const showCardBackdrops = paginatedItems.length <= 12;
+    // 4. Kartların DOM'a Eklenmesi — kapaklar eager + proxy ile paralel yüklenir
+    const showCardBackdrops = false;
     const fragment = document.createDocumentFragment();
+    const isMoviesView = universeSnapshot === 'MOVIES';
 
     paginatedItems.forEach(item => {
         const card = document.createElement('div');
@@ -2352,9 +2345,9 @@ async function renderContentCards() {
 
                     <div class="card-badges-row">
                         <span class="badge-yellow"><i class="fa-solid fa-star"></i> Puan: ${item.rating_num ? item.rating_num.toFixed(1) : item.rating}</span>
-                        <span class="badge-purple" style="background: rgba(168, 85, 247, 0.15); border-color: #a855f7; color: #c084fc;"><i class="fa-solid ${currentUniverse === 'MOVIES' ? 'fa-clock' : 'fa-layer-group'}"></i> ${currentUniverse === 'MOVIES' ? (item.ep_duration || item.runtime || 120) + ' dk' : (item.seasons || '1 Sezon')}</span>
+                        <span class="badge-purple" style="background: rgba(168, 85, 247, 0.15); border-color: #a855f7; color: #c084fc;"><i class="fa-solid ${isMoviesView ? 'fa-clock' : 'fa-layer-group'}"></i> ${isMoviesView ? (item.ep_duration || item.runtime || 120) + ' dk' : (item.seasons || '1 Sezon')}</span>
                         ${item.year ? `<span class="badge-cyan" style="background: rgba(14, 165, 233, 0.15); border-color: #0ea5e9; color: #38bdf8;"><i class="fa-solid fa-calendar-days"></i> ${item.year}</span>` : ''}
-                        ${currentUniverse === 'SERIES' && item.ep_duration ? `<span class="badge-cyan" style="background: rgba(168, 85, 247, 0.15); border-color: #a855f7; color: #c084fc;"><i class="fa-solid fa-clock"></i> ${item.ep_duration} dk/bölüm</span>` : ''}
+                        ${!isMoviesView && item.ep_duration ? `<span class="badge-cyan" style="background: rgba(168, 85, 247, 0.15); border-color: #a855f7; color: #c084fc;"><i class="fa-solid fa-clock"></i> ${item.ep_duration} dk/bölüm</span>` : ''}
                     </div>
 
                     <div class="card-platform-status">
