@@ -174,42 +174,6 @@ function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fe
     return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
-/** Görselleri paralel ön-yükle; timeout'ta boyamaya devam et (sonsuz bekleme yok). */
-function preloadImages(urls, timeoutMs = 3500) {
-    const list = [...new Set((urls || []).filter(Boolean))];
-    if (!list.length) return Promise.resolve();
-    return new Promise((resolve) => {
-        let left = list.length;
-        let settled = false;
-        const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve();
-        };
-        const timer = setTimeout(finish, timeoutMs);
-        list.forEach((url) => {
-            const img = new Image();
-            const one = () => {
-                left -= 1;
-                if (left <= 0) finish();
-            };
-            img.onload = one;
-            img.onerror = one;
-            img.referrerPolicy = 'no-referrer';
-            img.src = url;
-        });
-    });
-}
-
-function exploreLoadingHtml(message) {
-    return `
-        <div style="grid-column:1/-1;text-align:center;padding:36px 16px;color:#c4b5fd;font-weight:700;">
-            <div style="width:46px;height:46px;border:3px solid rgba(168,85,247,0.25);border-top-color:#facc15;border-radius:50%;animation:spin 0.75s linear infinite;margin:0 auto 14px;"></div>
-            ${escapeHtml(message || 'Kapaklar hazırlanıyor…')}
-        </div>`;
-}
-
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
 function bindLandingHeroReady() {
     const hero = document.querySelector('.hero-split-image');
@@ -2425,18 +2389,12 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
-    // 4. Önce kapakları ısıt, sonra kartları tek seferde boya (placeholder yağmuru olmasın)
+    // 4. Kartları anında boya — afişler tarayıcıda paralel yüklenir (preload bekleme yok)
     const showCardBackdrops = false;
     const isMoviesView = universeSnapshot === 'MOVIES';
-    const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
-    cardsContainer.innerHTML = exploreLoadingHtml('Kapaklar hazırlanıyor…');
+    const fragment = document.createDocumentFragment();
 
-    (async () => {
-        await preloadImages(posterUrls, 3200);
-        if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
-
-        const fragment = document.createDocumentFragment();
-        paginatedItems.forEach((item, cardIdx) => {
+    paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
@@ -2518,9 +2476,8 @@ function renderContentCards() {
 
         fragment.appendChild(card);
     });
-        cardsContainer.innerHTML = '';
-        cardsContainer.appendChild(fragment);
-    })();
+    cardsContainer.innerHTML = '';
+    cardsContainer.appendChild(fragment);
 }
 
 
@@ -5411,34 +5368,16 @@ function renderAIRecommendationsCards(recsPayload, userQuery, container, isMovie
         ? ((typeof REAL_MOVIES_DATA !== 'undefined') ? REAL_MOVIES_DATA : SAMPLE_MOVIES)
         : ((typeof REAL_SERIES_DATA !== 'undefined') ? REAL_SERIES_DATA : SAMPLE_SERIES);
 
-    if (!renderAIRecommendationsCards._token) renderAIRecommendationsCards._token = 0;
-    const paintToken = ++renderAIRecommendationsCards._token;
-    const prepared = visibleItems.map(item => {
+    let html = `<div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px;">`;
+    visibleItems.forEach(item => {
         const candidate = item.candidate || item;
         const fullData = getMediaItemFullDetails(candidate, dataset) || candidate;
-        return {
-            candidate,
-            fullData,
-            score: candidate.aiMatchScore || candidate.score || 85,
-            reason: candidate.aiReason || candidate.reasonText || 'Kütüphanenizle yüksek yapay zeka uyumu.'
-        };
+        const score = candidate.aiMatchScore || candidate.score || 85;
+        const reason = candidate.aiReason || candidate.reasonText || 'Kütüphanenizle yüksek yapay zeka uyumu.';
+        html += `<div id="ai-rec-card-${candidate.id}">${buildAICardHTML(fullData, score, reason, isMovie)}</div>`;
     });
-
-    container.innerHTML = exploreLoadingHtml('AI öneri kapakları hazırlanıyor…');
-    const preloadUrls = prepared.flatMap(({ fullData }) => [
-        resolvePosterUrl(fullData),
-        fullData.backdrop_url ? optimizeTmdbBackdropUrl(fullData.backdrop_url) : ''
-    ].filter(Boolean));
-
-    preloadImages(preloadUrls, 4000).then(() => {
-        if (paintToken !== renderAIRecommendationsCards._token) return;
-        let html = `<div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px;">`;
-        prepared.forEach(({ candidate, fullData, score, reason }) => {
-            html += `<div id="ai-rec-card-${candidate.id}">${buildAICardHTML(fullData, score, reason, isMovie)}</div>`;
-        });
-        html += `</div>`;
-        container.innerHTML = html;
-    });
+    html += `</div>`;
+    container.innerHTML = html;
 }
 
 function handleInstantSlotSwap(itemId, buttonEl) {
