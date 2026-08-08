@@ -8,6 +8,8 @@
     <!-- Google Fonts: Inter & Montserrat -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://image.tmdb.org" crossorigin>
+    <link rel="dns-prefetch" href="https://image.tmdb.org">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@700;800;900&display=swap" rel="stylesheet">
     <!-- FontAwesome Icon Set -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -84,7 +86,7 @@
         <header class="app-header">
             <div class="header-left">
                 <div class="brand-logo" id="brand-logo" style="display: flex; align-items: center; gap: 12px;">
-                    <img id="brand-logo-img" src="assets/logo_filmimibul.svg" alt="Logo" style="height: 40px; width: auto; filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.65)); transition: all 0.3s ease;" />
+                    <img id="brand-logo-img" src="assets/logo_filmimibul.svg" alt="Logo" width="40" height="40" decoding="async" onerror="this.onerror=null;this.src='assets/filmimibul_icon.png';" style="height: 40px; width: auto; filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.65)); transition: all 0.3s ease;" />
                     <span id="brand-text">FilmimiBul</span>
                 </div>
                 <div class="universe-badge" id="current-universe-badge">
@@ -1099,6 +1101,6 @@
     <!-- Gerçek Dizi & Film Veri Deposu -->
     <script src="data_store.js?v=85"></script>
     <!-- Uygulama Scripti -->
-    <script src="script_web.js?v=112"></script>
+    <script src="script_web.js?v=113"></script>
 </body>
 </html>

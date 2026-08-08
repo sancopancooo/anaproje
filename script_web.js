@@ -66,24 +66,45 @@ const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+const LOGO_FALLBACK_MOVIES = 'assets/filmimibul_icon.png';
+const LOGO_FALLBACK_SERIES = 'assets/dizimibul_icon.png';
 
+/** TMDB URL'lerini w342'ye indirger (doğrudan CDN; proxy yok). */
 function optimizeTmdbPosterUrl(url) {
     if (!url || !String(url).includes('image.tmdb.org')) return url;
-    const cleanUrl = String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w342/').replace(/\/t\/p\/original\//, '/t/p/w342/');
-    return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}`;
+    return String(url)
+        .replace(/\/t\/p\/w\d+\//, '/t/p/w342/')
+        .replace(/\/t\/p\/original\//, '/t/p/w342/');
 }
 
 function optimizeTmdbBackdropUrl(url) {
     if (!url || !String(url).includes('image.tmdb.org')) return url;
-    const cleanUrl = String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w780/').replace(/\/t\/p\/original\//, '/t/p/w780/');
-    return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}`;
+    return String(url)
+        .replace(/\/t\/p\/w\d+\//, '/t/p/w780/')
+        .replace(/\/t\/p\/original\//, '/t/p/w780/');
 }
 
 function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = item.poster_url || item.afis_url || '';
     if (!String(raw).trim()) return TMDB_POSTER_FALLBACK;
-    return optimizeTmdbPosterUrl(String(raw).trim());
+    // wsrv / eski proxy URL'leri kalmışsa temizle
+    let url = String(raw).trim();
+    if (url.includes('wsrv.nl')) {
+        try {
+            const nested = new URL(url).searchParams.get('url');
+            if (nested) url = nested;
+        } catch (_) { /* ignore */ }
+    }
+    if (url.includes('/api/tmdb-image')) {
+        try {
+            const u = new URL(url, 'https://local.invalid');
+            const path = u.searchParams.get('path') || '';
+            const size = u.searchParams.get('size') || 'w342';
+            if (path) url = `https://image.tmdb.org/t/p/${size}${path.startsWith('/') ? path : '/' + path}`;
+        } catch (_) { /* ignore */ }
+    }
+    return optimizeTmdbPosterUrl(url);
 }
 
 function safeImageSrc(url) {
@@ -92,8 +113,24 @@ function safeImageSrc(url) {
 
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = true) {
     const src = safeImageSrc(url || TMDB_POSTER_FALLBACK);
-    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : '';
+    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'decoding="async"';
     return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" onError="this.onerror=null; this.src='${TMDB_POSTER_FALLBACK}';" />`;
+}
+
+function setBrandLogo(universe) {
+    const brandLogoImg = document.getElementById('brand-logo-img');
+    if (!brandLogoImg) return;
+    const isMovies = universe === 'MOVIES';
+    const primary = isMovies ? 'assets/logo_filmimibul.svg' : 'assets/logo_dizimibul.svg';
+    const fallback = isMovies ? LOGO_FALLBACK_MOVIES : LOGO_FALLBACK_SERIES;
+    brandLogoImg.onerror = function () {
+        this.onerror = null;
+        this.src = fallback;
+    };
+    brandLogoImg.src = primary;
+    brandLogoImg.style.filter = isMovies
+        ? 'drop-shadow(0 0 10px rgba(249, 115, 22, 0.65))'
+        : 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.65))';
 }
 
 function isValidTrailerUrl(url) {
@@ -744,17 +781,12 @@ function setUniverse(universe) {
     const summaryManualAdd = document.getElementById('summary-manual-add');
     const lblSelectManual = document.getElementById('lbl-select-manual');
 
-    const brandLogoImg = document.getElementById('brand-logo-img');
-
     if (universe === 'MOVIES') {
         body.classList.remove('theme-blue');
         if (universeName) universeName.textContent = 'Film Evreni';
         if (switchText) switchText.textContent = 'Dizilere Geç';
         if (brandText) brandText.textContent = 'FilmimiBul';
-        if (brandLogoImg) {
-            brandLogoImg.src = 'assets/logo_filmimibul.svg';
-            brandLogoImg.style.filter = 'drop-shadow(0 0 10px rgba(249, 115, 22, 0.65))';
-        }
+        setBrandLogo('MOVIES');
         if (aiHeading) aiHeading.innerHTML = '<i class="fa-solid fa-film"></i> Yapay Zeka ile Film Keşfet';
         if (aiLabel) aiLabel.textContent = 'Ne tür bir film arıyorsun?';
         if (btnListText) btnListText.textContent = 'Filmleri Listele';
@@ -774,10 +806,7 @@ function setUniverse(universe) {
         if (universeName) universeName.textContent = 'Dizi Evreni';
         if (switchText) switchText.textContent = 'Filmlere Geç';
         if (brandText) brandText.textContent = 'DizimiBul';
-        if (brandLogoImg) {
-            brandLogoImg.src = 'assets/logo_dizimibul.svg';
-            brandLogoImg.style.filter = 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.65))';
-        }
+        setBrandLogo('SERIES');
         if (aiHeading) aiHeading.innerHTML = '<i class="fa-solid fa-tv"></i> Yapay Zeka ile Dizi Keşfet';
         if (aiLabel) aiLabel.textContent = 'Ne tür bir dizi arıyorsun?';
         if (btnListText) btnListText.textContent = 'Dizileri Listele';
@@ -4988,7 +5017,7 @@ window.CURRENT_REC_STATE = { visible: [], overflowQueue: [], isMovie: false };
 function buildAICardHTML(itemData, score, reason, isMovie) {
     const itemId = itemData.id;
     const title = itemData.title || 'Önerilen Yapım';
-    const poster = itemData.afis_url || itemData.poster_url || 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+    const poster = resolvePosterUrl(itemData);
     
     let ratingVal = itemData.rating_num || itemData.puan_ortalamasi || itemData.puan || itemData.rating || 7.5;
     if (typeof ratingVal === 'number') ratingVal = ratingVal.toFixed(1);
