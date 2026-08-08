@@ -1646,22 +1646,24 @@ function buildPlatformWatchUrl(platformName, title) {
     const rawTitle = String(title || '').trim() || 'film';
     const q = encodeURIComponent(rawTitle);
     const google = `https://www.google.com/search?q=${encodeURIComponent(`${rawTitle} türkçe altyazılı izle`)}`;
-    switch (platformName) {
-        case 'Netflix':
-            return `https://www.netflix.com/search?q=${q}`;
-        case 'Amazon Prime':
-            return `https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${q}`;
-        case 'Disney+':
-            // disneyplus.com/search?q= ve /browse/search?q= 404 veriyor; resmi başlık için Google site araması
-            return `https://www.google.com/search?q=${encodeURIComponent(`${rawTitle} site:disneyplus.com`)}`;
-        case 'HBO Max':
-            // www.max.com/search ve hbomax.com/search kırık; çalışan arama: play.max.com
-            return `https://play.max.com/search/result?q=${q}`;
-        case 'Apple TV+':
-            return `https://tv.apple.com/search?term=${q}`;
-        default:
-            return google;
+    const norm = String(platformName || '').toLowerCase();
+
+    if (/amazon|prime/.test(norm)) {
+        return `https://www.primevideo.com/search/ref=atv_nb_sr?phrase=${q}`;
     }
+    if (/netflix/.test(norm)) {
+        return `https://www.netflix.com/search?q=${q}`;
+    }
+    if (/disney/.test(norm)) {
+        return `https://www.disneyplus.com/browse/search?query=${q}`;
+    }
+    if (/hbo|\bmax\b/.test(norm)) {
+        return `https://play.max.com/search?q=${q}`;
+    }
+    if (/apple/.test(norm)) {
+        return `https://tv.apple.com/search?term=${q}`;
+    }
+    return google;
 }
 
 /** Platform adlarını tıklanabilir linklere çevirir (yeni sekme). */
@@ -3570,22 +3572,26 @@ function addToLibraryFromExplore(itemId) {
     if (!CURRENT_USER || CURRENT_USER === 'Kullanıcı') {
         showToast('🔒 Kitaplığa içerik eklemek için lütfen giriş yapın veya kaydolun!', 2200);
         openAuthModal('LOGIN');
-        return;
+        return false;
     }
 
-    const dataset = (currentUniverse === 'MOVIES') 
+    const dataset = (currentUniverse === 'MOVIES')
         ? ((typeof REAL_MOVIES_DATA !== 'undefined') ? REAL_MOVIES_DATA : SAMPLE_MOVIES)
         : ((typeof REAL_SERIES_DATA !== 'undefined') ? REAL_SERIES_DATA : SAMPLE_SERIES);
 
-    const foundItem = dataset.find(i => i.id === itemId);
-    if (!foundItem) return;
+    const foundItem = getMediaItemFullDetails({ id: itemId }, dataset);
+    if (!foundItem || !foundItem.title) {
+        showToast('⚠️ Yapım katalogda bulunamadı, kitaplığa eklenemedi.', 2200);
+        return false;
+    }
 
+    const canonicalId = foundItem.id || itemId;
     const targetLib = getActiveLibrary();
-    const existing = targetLib.find(i => i.id === foundItem.id);
+    const existing = targetLib.find(i => idsLooselyEqual(i.id, canonicalId) || idsLooselyEqual(i.id, itemId));
 
     if (existing) {
         showToast(`ℹ️ ${foundItem.title} zaten kitaplığınızda (${existing.status}) kayıtlı!`, 1800);
-        return;
+        return false;
     }
 
     const map = foundItem.season_episodes_map || [10];
@@ -3593,10 +3599,10 @@ function addToLibraryFromExplore(itemId) {
     const totalEpisodes = foundItem.total_episodes || map.reduce((a, b) => a + b, 0);
 
     targetLib.unshift({
-        id: foundItem.id,
+        id: canonicalId,
         title: foundItem.title,
         status: (currentUniverse === 'MOVIES') ? "İzleyeceğim" : "İzleyeceğim",
-        poster_url: foundItem.poster_url,
+        poster_url: foundItem.poster_url || foundItem.afis_url,
         rating: foundItem.rating,
         total_seasons: totalSeasons,
         season_episodes_map: map,
@@ -3604,9 +3610,9 @@ function addToLibraryFromExplore(itemId) {
         current_season: 1,
         current_episode: 0,
         platform: foundItem.platform || 'Netflix',
-        status_text: foundItem.status || 'Bitmiş / Final Yapmış',
+        status_text: foundItem.status || foundItem.status_text || 'Bitmiş / Final Yapmış',
         duo: foundItem.duo || '',
-        summary: foundItem.summary || '',
+        summary: foundItem.summary || foundItem.ozet || '',
         ep_duration: foundItem.ep_duration || (currentUniverse === 'MOVIES' ? 140 : 45),
         genres: foundItem.genres || [],
         trailer_url: foundItem.trailer_url || '',
@@ -3615,11 +3621,12 @@ function addToLibraryFromExplore(itemId) {
     });
 
     showToast(`✅ <strong>${foundItem.title}</strong> kitaplığınıza eklendi!`, 1800);
-    // Kitaplık değişti → AI tavsiye cache geçersiz
     window.BACKEND_REC_CACHE = {};
     window._libraryNeedsRefresh = true;
     if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
+    if (CURRENT_USER) saveUserData(CURRENT_USER);
     updateLibraryUI();
+    return true;
 }
 
 // BÖLÜM İLERLETME (+): SEZON BÖLÜM HARİTASINA GÖRE SONRAKİ SEZONA VE 'İZLİYORUM'A GEÇER
@@ -5190,11 +5197,21 @@ function handleInstantSlotSwap(itemId, buttonEl) {
     }, 300);
 }
 
+function purgeItemFromRecState(itemId) {
+    if (!window.CURRENT_REC_STATE) return;
+    const matches = (entry) => {
+        const candidate = entry && (entry.candidate || entry);
+        if (!candidate || candidate.id == null) return false;
+        return idsLooselyEqual(candidate.id, itemId);
+    };
+    window.CURRENT_REC_STATE.visible = (window.CURRENT_REC_STATE.visible || []).filter(x => !matches(x));
+    window.CURRENT_REC_STATE.overflowQueue = (window.CURRENT_REC_STATE.overflowQueue || []).filter(x => !matches(x));
+}
+
 function addRecToLibrary(itemId, buttonEl) {
-    const isMovie = (currentUniverse === 'MOVIES');
-    if (typeof addToLibrary === 'function') {
-        addToLibrary(itemId, isMovie ? 'movies' : 'series');
-    }
+    const added = addToLibraryFromExplore(itemId);
+    if (!added) return;
+    purgeItemFromRecState(itemId);
     handleInstantSlotSwap(itemId, buttonEl);
 }
 
@@ -7766,6 +7783,7 @@ function renderFeedbackUI() {
     }
 
     if (CURRENT_USER) saveUserData(CURRENT_USER);
+    loadErrorReportsInbox();
 }
 
 // TERCİH KART HTML ŞABLONU (FOTOĞRAFTAKİ BİREBİR MİMARİ - ÖZET VARSAYILAN KAPALI GELİR!)
