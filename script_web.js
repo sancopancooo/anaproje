@@ -207,23 +207,80 @@ function bindLandingHeroReady() {
     hero.addEventListener('error', markReady, { once: true });
 }
 
+/** Giriş / evren değişiminde: önce boş ekran, kapaklar hazır olunca boya. */
+let _exploreReadyGate = false;
+
+function preloadImages(urls, timeoutMs = 3000) {
+    const list = [...new Set((urls || []).filter(Boolean))];
+    if (!list.length) return Promise.resolve();
+    return new Promise((resolve) => {
+        let left = list.length;
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        list.forEach((url) => {
+            const img = new Image();
+            const one = () => {
+                left -= 1;
+                if (left <= 0) finish();
+            };
+            img.onload = one;
+            img.onerror = one;
+            img.referrerPolicy = 'no-referrer';
+            img.src = url;
+        });
+    });
+}
+
+function ensureExploreBootMask() {
+    let mask = document.getElementById('explore-boot-mask');
+    if (mask) return mask;
+    mask = document.createElement('div');
+    mask.id = 'explore-boot-mask';
+    mask.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(mask);
+    return mask;
+}
+
+function showExploreBootMask() {
+    const mask = ensureExploreBootMask();
+    mask.classList.add('is-visible');
+}
+
+function hideExploreBootMask() {
+    const mask = document.getElementById('explore-boot-mask');
+    if (mask) mask.classList.remove('is-visible');
+}
+
+async function waitExploreReadyBlank(urls) {
+    const minMs = 2000;
+    const maxMs = 3000;
+    const started = Date.now();
+    showExploreBootMask();
+    await preloadImages(urls, maxMs);
+    const left = minMs - (Date.now() - started);
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
+}
+
 /** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
 function resetExploreCardsForUniverseSwitch() {
     _renderCardsToken += 1;
     currentPage = 1;
+    _exploreReadyGate = true;
     if (_renderCardsDebounceTimer) {
         clearTimeout(_renderCardsDebounceTimer);
         _renderCardsDebounceTimer = null;
     }
     const cardsContainer = document.getElementById('cards-container');
     const resultsCountText = document.getElementById('results-count-text');
-    if (cardsContainer) {
-        cardsContainer.innerHTML = `
-            <div style="grid-column:1/-1;text-align:center;padding:28px 12px;color:#9ca3af;font-weight:700;">
-                Liste yenileniyor…
-            </div>`;
-    }
-    if (resultsCountText) resultsCountText.textContent = 'Liste yenileniyor…';
+    if (cardsContainer) cardsContainer.innerHTML = '';
+    if (resultsCountText) resultsCountText.textContent = '';
+    showExploreBootMask();
 }
 
 function isMainAppVisible() {
@@ -810,23 +867,20 @@ window.enterAppFromGlobal = function(universe) {
         }
 
         stopMatrixCanvas();
-        // Kartları portal-entry (opacity:0 + blur) bitmeden boyama —
-        // ilk girişte afişler error'a düşüp sarı placeholder'a kilitleniyordu.
-        // Evren değiştirince animasyon olmadığı için resimler düzgün geliyordu.
-        const paintExplore = () => {
-            try {
-                scheduleRenderContentCards(true);
-                window._libraryNeedsRefresh = true;
-                window._favoritesNeedsRefresh = true;
-                if (typeof updateVersusUI === 'function') updateVersusUI();
-                if (typeof renderSocialUI === 'function') renderSocialUI();
-                if (typeof renderFeedbackUI === 'function') renderFeedbackUI();
-            } catch (err) {
-                console.warn("Render error:", err);
-            }
-            isTransitioning = false;
-        };
-        setTimeout(paintExplore, 820);
+        // Boş maske + kapak preload; hazır olunca kartlar toptan gelir
+        _exploreReadyGate = true;
+        showExploreBootMask();
+        try {
+            scheduleRenderContentCards(true);
+            window._libraryNeedsRefresh = true;
+            window._favoritesNeedsRefresh = true;
+            if (typeof updateVersusUI === 'function') updateVersusUI();
+            if (typeof renderSocialUI === 'function') renderSocialUI();
+            if (typeof renderFeedbackUI === 'function') renderFeedbackUI();
+        } catch (err) {
+            console.warn("Render error:", err);
+        }
+        isTransitioning = false;
     }, 600);
 };
 
@@ -2415,12 +2469,19 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
-    // 4. Kartları anında boya — afişler tarayıcıda paralel yüklenir (preload bekleme yok)
+    // 4. Giriş/evren değişiminde: 2–3 sn boş bekleyip kapaklar hazır olunca toptan boya
     const showCardBackdrops = false;
     const isMoviesView = universeSnapshot === 'MOVIES';
-    const fragment = document.createDocumentFragment();
+    const useReadyGate = _exploreReadyGate;
+    _exploreReadyGate = false;
 
-    paginatedItems.forEach((item, cardIdx) => {
+    const paintCards = () => {
+        if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) {
+            hideExploreBootMask();
+            return;
+        }
+        const fragment = document.createDocumentFragment();
+        paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
@@ -2502,8 +2563,19 @@ function renderContentCards() {
 
         fragment.appendChild(card);
     });
-    cardsContainer.innerHTML = '';
-    cardsContainer.appendChild(fragment);
+        cardsContainer.innerHTML = '';
+        cardsContainer.appendChild(fragment);
+        hideExploreBootMask();
+    };
+
+    if (useReadyGate) {
+        cardsContainer.innerHTML = '';
+        const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
+        waitExploreReadyBlank(posterUrls).then(paintCards);
+        return;
+    }
+
+    paintCards();
 }
 
 
