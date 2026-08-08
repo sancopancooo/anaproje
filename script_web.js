@@ -141,10 +141,9 @@ function toWeservTmdbUrl(url, size) {
     const direct = toDirectTmdbUrl(url, size);
     if (!direct || !isTmdbImageHost(direct)) return '';
     const width = (size === 'w780') ? 780 : (size === 'w185' ? 185 : 342);
-    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}&output=webp`;
+    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}`;
 }
 
-/** Varsayılan: direkt TMDB. Yedekler onError zincirinde. */
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
@@ -157,81 +156,148 @@ function optimizeTmdbBackdropUrl(url) {
     return isTmdbImageHost(direct) ? direct : (direct || url);
 }
 
+/** Afiş URL adayları: kendi backend proxy → weserv → direkt TMDB */
+function buildPosterCandidatesList(rawUrl) {
+    const resolved = String(rawUrl || '').trim();
+    if (!resolved) return [TMDB_POSTER_FALLBACK];
+    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
+    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
+    const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
+    const tmdbDirect = (direct && isTmdbImageHost(direct)) ? direct : '';
+    const ordered = [...new Set([proxy, weserv, tmdbDirect, resolved].filter(Boolean))];
+    return ordered.length ? ordered : [TMDB_POSTER_FALLBACK];
+}
+
 function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = String(item.poster_url || item.afis_url || '').trim();
     if (!raw) return TMDB_POSTER_FALLBACK;
-    // TR ağlarında image.tmdb.org sık engellendiği için güvenilir weserv aynasını döndür
-    return buildPosterCandidates(raw).primary || optimizeTmdbPosterUrl(raw);
+    return buildPosterCandidatesList(raw)[0] || TMDB_POSTER_FALLBACK;
 }
 
 window.__posterImgError = function (img) {
     if (!img) return;
-    const primary = img.getAttribute('data-primary') || '';
-    const mirror = img.getAttribute('data-mirror') || '';
-    const proxy = img.getAttribute('data-proxy') || '';
+    let candidates = [];
+    try { candidates = JSON.parse(img.getAttribute('data-candidates') || '[]'); } catch (_) { /* ignore */ }
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+    const idx = parseInt(img.dataset.candidateIdx || '0', 10);
 
-    // 1) weserv aynası
-    if (mirror && !img.dataset.triedMirror) {
-        img.dataset.triedMirror = '1';
-        img.src = mirror;
+    if (candidates.length && idx + 1 < candidates.length) {
+        img.dataset.candidateIdx = String(idx + 1);
+        img.src = candidates[idx + 1];
         return;
     }
-    // 2) render proxy
-    if (proxy && !img.dataset.triedProxy) {
-        img.dataset.triedProxy = '1';
-        img.src = proxy;
-        return;
-    }
-    // 3) Kendi kendini onaran tekrar: ilk boyada çok sayıda afiş aynı anda
-    //    yüklenince bazıları geçici olarak hata verip placeholder'a düşüyordu
-    //    (evren geçişinde re-render ile düzeliyordu). Placeholder'a düşmeden
-    //    önce gerçek kaynakları birkaç kez yeniden dene.
+
     const retries = parseInt(img.dataset.retryCount || '0', 10);
-    if (primary && retries < 3) {
+    if (candidates.length && retries < 2) {
         img.dataset.retryCount = String(retries + 1);
-        img.dataset.triedMirror = '';
-        img.dataset.triedProxy = '';
-        const delay = 350 * (retries + 1);
-        setTimeout(() => {
-            img.src = primary + (primary.includes('?') ? '&' : '?') + '_r=' + Date.now();
-        }, delay);
+        img.dataset.candidateIdx = '0';
+        const bust = candidates[0] + (candidates[0].includes('?') ? '&' : '?') + '_r=' + Date.now();
+        setTimeout(() => { img.src = bust; }, 450 * (retries + 1));
         return;
     }
-    // 4) Her şey başarısız → placeholder
+
     img.onerror = null;
     if (img.src !== fallback) img.src = fallback;
 };
 
-/**
- * Afiş kaynak sırası. TR ağlarında image.tmdb.org sık engellendiği/yavaşladığı
- * için güvenilir weserv aynası BİRİNCİL yapılır; ardından kendi proxy ve en son
- * direkt TMDB denenir.
- */
-function buildPosterCandidates(rawUrl) {
-    const resolved = String(rawUrl || '').trim() || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
-    const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
-    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
-    const tmdbDirect = (direct && isTmdbImageHost(direct)) ? direct : '';
-    const ordered = [...new Set([weserv, proxy, tmdbDirect, resolved].filter(Boolean))];
-    return {
-        primary: ordered[0] || resolved,
-        mirror: ordered[1] || '',
-        proxy: ordered[2] || ''
-    };
+/** Keşfet kartları: aynı anda 30 afiş yüklenmesin diye kuyruk (5 paralel). */
+let _posterQueue = [];
+let _posterActive = 0;
+const POSTER_LOAD_CONCURRENCY = 5;
+
+function parsePosterCandidates(img) {
+    try { return JSON.parse(img.getAttribute('data-candidates') || '[]'); }
+    catch (_) { return []; }
+}
+
+function drainPosterLoadQueue() {
+    while (_posterActive < POSTER_LOAD_CONCURRENCY && _posterQueue.length) {
+        const img = _posterQueue.shift();
+        if (!img || !img.isConnected) continue;
+        _posterActive += 1;
+        loadQueuedPoster(img).finally(() => {
+            _posterActive -= 1;
+            drainPosterLoadQueue();
+        });
+    }
+}
+
+function loadQueuedPoster(img) {
+    if (!img || !img.isConnected) return Promise.resolve();
+    const candidates = parsePosterCandidates(img);
+    const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+    if (!candidates.length) {
+        img.src = fallback;
+        img.classList.remove('is-poster-pending');
+        return Promise.resolve();
+    }
+
+    let idx = 0;
+    const tryNext = () => new Promise((resolve) => {
+        if (idx >= candidates.length) {
+            img.src = fallback;
+            img.classList.remove('is-poster-pending');
+            resolve();
+            return;
+        }
+        const url = candidates[idx];
+        idx += 1;
+        img.dataset.candidateIdx = String(idx - 1);
+        const onOk = () => {
+            cleanup();
+            img.classList.remove('is-poster-pending');
+            img.onerror = function () { window.__posterImgError(this); };
+            resolve();
+        };
+        const onFail = () => {
+            cleanup();
+            tryNext().then(resolve);
+        };
+        const cleanup = () => {
+            img.removeEventListener('load', onOk);
+            img.removeEventListener('error', onFail);
+        };
+        img.addEventListener('load', onOk, { once: true });
+        img.addEventListener('error', onFail, { once: true });
+        img.src = url;
+    });
+
+    return tryNext();
+}
+
+function hydrateCardPosters(root) {
+    if (!root) return;
+    root.querySelectorAll('img.is-poster-pending:not([data-poster-queued])').forEach((img) => {
+        img.dataset.posterQueued = '1';
+        _posterQueue.push(img);
+    });
+    drainPosterLoadQueue();
 }
 
 /**
- * Kart afişleri: weserv → Render proxy → direkt TMDB → placeholder.
- * Çift sarmalama yok; & attribute kaçışı safeImageSrc ile.
+ * Kart afişleri: backend proxy → weserv → direkt TMDB → placeholder.
+ * deferLoad=true ise src boş bırakılır; hydrateCardPosters kuyruğa alır.
  */
-function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
-    const { primary, mirror, proxy } = buildPosterCandidates(url);
+function posterImgHtml(url, alt, className = 'card-poster-img', options = {}) {
+    if (typeof options === 'boolean') {
+        options = { lazy: options, fetchPriority: arguments[4] || '', deferLoad: false };
+    }
+    const lazy = options.lazy ?? false;
+    const fetchPriority = options.fetchPriority ?? '';
+    const deferLoad = options.deferLoad ?? false;
+    const raw = String(url || '').trim();
+    const candidates = buildPosterCandidatesList(raw);
+    const candidatesAttr = safeImageSrc(JSON.stringify(candidates));
+
+    if (deferLoad) {
+        return `<img class="${className} is-poster-pending" alt="${escapeHtml(alt || '')}" decoding="async" referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-fallback="${TMDB_POSTER_FALLBACK}" />`;
+    }
+
+    const primary = candidates[0] || TMDB_POSTER_FALLBACK;
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-candidate-idx="0" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -2537,13 +2603,14 @@ function renderContentCards() {
             hideExploreBootMask();
             return;
         }
+        _posterQueue = _posterQueue.filter((img) => img.isConnected);
         const fragment = document.createDocumentFragment();
         paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
         const whyWatchList = (item.why_watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
-        const posterSrc = resolvePosterUrl(item);
+        const rawPoster = item.poster_url || item.afis_url || '';
 
         card.innerHTML = `
             ${showCardBackdrops ? renderCardBackdropHtml(item.backdrop_url) : ''}
@@ -2551,7 +2618,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', cardIdx >= 4, cardIdx < 4 ? 'high' : 'auto')}
+                    ${posterImgHtml(rawPoster, item.title, 'card-poster-img', { deferLoad: true })}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -2622,9 +2689,8 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
-        // Kartlar DOM'a girdi; maskeyi hemen kaldır (afişler kendi kendine
-        // yüklenir, hata olursa __posterImgError tekrar dener)
         hideExploreBootMask();
+        hydrateCardPosters(cardsContainer);
     };
 
     // Kartları anında toptan boya (yapay 2-3 sn bekleme yok); paintCards
@@ -6376,16 +6442,13 @@ function openItemDetailModal(itemId) {
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
         posterElem.onerror = function () { window.__posterImgError(this); };
-        delete posterElem.dataset.triedMirror;
-        delete posterElem.dataset.triedProxy;
+        delete posterElem.dataset.candidateIdx;
         delete posterElem.dataset.retryCount;
-        const cand = buildPosterCandidates(item.poster_url || item.afis_url);
-        posterElem.setAttribute('data-primary', cand.primary);
-        posterElem.setAttribute('data-mirror', cand.mirror);
-        posterElem.setAttribute('data-proxy', cand.proxy);
+        const candidates = buildPosterCandidatesList(item.poster_url || item.afis_url);
+        posterElem.setAttribute('data-candidates', JSON.stringify(candidates));
         posterElem.setAttribute('data-fallback', TMDB_POSTER_FALLBACK);
         posterElem.removeAttribute('data-direct');
-        posterElem.src = cand.primary;
+        posterElem.src = candidates[0] || TMDB_POSTER_FALLBACK;
     }
     if (titleElem) titleElem.textContent = item.title;
 
