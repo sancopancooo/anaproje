@@ -326,6 +326,19 @@ body {
 .header-left { display: flex; align-items: center; gap: 20px; }
 .brand-logo { font-family: var(--font-heading); font-size: 1.5rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 10px; }
 .brand-logo i { color: var(--primary-color); }
+.brand-logo-mark {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+}
+.brand-logo-mark svg {
+    width: 40px;
+    height: 40px;
+    display: block;
+}
 .universe-badge { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 20px; background: var(--badge-bg); border: 1px solid var(--badge-border); font-size: 0.85rem; font-weight: 600; color: var(--primary-color); }
 
 .main-nav { display: flex; align-items: center; gap: 10px; }
@@ -2100,7 +2113,13 @@ input[type="range"]::-webkit-slider-thumb {
     #brand-text {
         font-size: 1.05rem !important;
     }
-    #brand-logo-img {
+    #brand-logo-img,
+    .brand-logo-mark {
+        width: 32px !important;
+        height: 32px !important;
+    }
+    .brand-logo-mark svg {
+        width: 32px !important;
         height: 32px !important;
     }
     .universe-badge {

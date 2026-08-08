@@ -3637,40 +3637,55 @@ def list_user_feedback():
         return jsonify({'error': 'Geri bildirimler okunamadı.', 'detail': str(e)}), 500
 
 
-@app.route('/api/tmdb-image', methods=['GET'])
+@app.route('/api/tmdb-image', methods=['GET', 'HEAD', 'OPTIONS'])
 def tmdb_image_proxy():
+    """TMDB afiş proxy — istemci engellerini aşmak için (TR vb.). CDN dostu cache."""
     import requests
     from flask import Response
-    
+
+    if request.method == 'OPTIONS':
+        resp = app.make_response(('', 204))
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        resp.headers['Cache-Control'] = 'public, max-age=86400'
+        return resp
+
     img_path = request.args.get('path', '')
     size = request.args.get('size', 'w342')
-    
+    allowed_sizes = {'w92', 'w154', 'w185', 'w342', 'w500', 'w780', 'original'}
+    if size not in allowed_sizes:
+        size = 'w342'
+
     if not img_path:
         return "Missing 'path' parameter", 400
-        
-    # Standartlaştırma (başında / olduğundan emin olma)
+
     if not img_path.startswith('/'):
         img_path = '/' + img_path
-        
-    # Güvenli karakter denetimi
+
     if not re.match(r'^/[a-zA-Z0-9_\-\./]+$', img_path):
         return "Invalid path format", 400
-        
+
     tmdb_url = f"https://image.tmdb.org/t/p/{size}{img_path}"
-    
+
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
         }
-        res = requests.get(tmdb_url, headers=headers, stream=True, timeout=10)
+        res = requests.get(tmdb_url, headers=headers, timeout=12)
         if res.status_code != 200:
             return f"Failed to fetch image from TMDB: status {res.status_code}", res.status_code
-            
+
         content_type = res.headers.get('Content-Type', 'image/jpeg')
         response_headers = {
             'Content-Type': content_type,
-            'Cache-Control': 'public, max-age=31536000'
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'Access-Control-Allow-Origin': '*',
+            'Cross-Origin-Resource-Policy': 'cross-origin',
         }
+        if request.method == 'HEAD':
+            return Response(b'', headers=response_headers)
         return Response(res.content, headers=response_headers)
     except Exception as e:
         return f"Proxy error: {str(e)}", 500

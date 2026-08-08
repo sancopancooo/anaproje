@@ -66,71 +66,138 @@ const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
-const LOGO_FALLBACK_MOVIES = 'assets/filmimibul_icon.png';
-const LOGO_FALLBACK_SERIES = 'assets/dizimibul_icon.png';
 
-/** TMDB URL'lerini w342'ye indirger (doğrudan CDN; proxy yok). */
+function getApiBaseUrl() {
+    return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? String(API_BASE_URL).replace(/\/$/, '') : '';
+}
+
+function extractTmdbImagePath(url) {
+    const m = String(url || '').match(/\/t\/p\/[^/]+(\/[^?\s#]+)/);
+    return m ? m[1] : '';
+}
+
+function toDirectTmdbUrl(url, size) {
+    let raw = String(url || '').trim();
+    if (!raw) return '';
+    if (raw.includes('wsrv.nl')) {
+        try {
+            const nested = new URL(raw).searchParams.get('url');
+            if (nested) raw = nested;
+        } catch (_) { /* ignore */ }
+    }
+    if (raw.includes('/api/tmdb-image')) {
+        try {
+            const u = new URL(raw, 'https://local.invalid');
+            const path = u.searchParams.get('path') || '';
+            const sz = u.searchParams.get('size') || size;
+            if (path) return `https://image.tmdb.org/t/p/${sz}${path.startsWith('/') ? path : '/' + path}`;
+        } catch (_) { /* ignore */ }
+    }
+    if (!raw.includes('image.tmdb.org')) return raw;
+    return raw
+        .replace(/\/t\/p\/w\d+\//, `/t/p/${size}/`)
+        .replace(/\/t\/p\/original\//, `/t/p/${size}/`);
+}
+
+/** TMDB görselleri: önce Render proxy (TR engelleri), yoksa doğrudan CDN. */
 function optimizeTmdbPosterUrl(url) {
-    if (!url || !String(url).includes('image.tmdb.org')) return url;
-    return String(url)
-        .replace(/\/t\/p\/w\d+\//, '/t/p/w342/')
-        .replace(/\/t\/p\/original\//, '/t/p/w342/');
+    const direct = toDirectTmdbUrl(url, 'w342');
+    if (!direct || !direct.includes('image.tmdb.org')) return direct || url;
+    const path = extractTmdbImagePath(direct);
+    const apiBase = getApiBaseUrl();
+    if (apiBase && path) {
+        return `${apiBase}/api/tmdb-image?size=w342&path=${encodeURIComponent(path)}`;
+    }
+    return direct;
 }
 
 function optimizeTmdbBackdropUrl(url) {
-    if (!url || !String(url).includes('image.tmdb.org')) return url;
-    return String(url)
-        .replace(/\/t\/p\/w\d+\//, '/t/p/w780/')
-        .replace(/\/t\/p\/original\//, '/t/p/w780/');
+    const direct = toDirectTmdbUrl(url, 'w780');
+    if (!direct || !direct.includes('image.tmdb.org')) return direct || url;
+    const path = extractTmdbImagePath(direct);
+    const apiBase = getApiBaseUrl();
+    if (apiBase && path) {
+        return `${apiBase}/api/tmdb-image?size=w780&path=${encodeURIComponent(path)}`;
+    }
+    return direct;
 }
 
 function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = item.poster_url || item.afis_url || '';
     if (!String(raw).trim()) return TMDB_POSTER_FALLBACK;
-    // wsrv / eski proxy URL'leri kalmışsa temizle
-    let url = String(raw).trim();
-    if (url.includes('wsrv.nl')) {
-        try {
-            const nested = new URL(url).searchParams.get('url');
-            if (nested) url = nested;
-        } catch (_) { /* ignore */ }
-    }
-    if (url.includes('/api/tmdb-image')) {
-        try {
-            const u = new URL(url, 'https://local.invalid');
-            const path = u.searchParams.get('path') || '';
-            const size = u.searchParams.get('size') || 'w342';
-            if (path) url = `https://image.tmdb.org/t/p/${size}${path.startsWith('/') ? path : '/' + path}`;
-        } catch (_) { /* ignore */ }
-    }
-    return optimizeTmdbPosterUrl(url);
+    return optimizeTmdbPosterUrl(String(raw).trim());
 }
 
 function safeImageSrc(url) {
     return String(url || '').replace(/"/g, '&quot;');
 }
 
+window.__posterImgError = function (img) {
+    if (!img) return;
+    const direct = img.getAttribute('data-direct') || '';
+    const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+    if (direct && !img.dataset.triedDirect && img.src !== direct) {
+        img.dataset.triedDirect = '1';
+        img.src = direct;
+        return;
+    }
+    img.onerror = null;
+    if (img.src !== fallback) img.src = fallback;
+};
+
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = true) {
-    const src = safeImageSrc(url || TMDB_POSTER_FALLBACK);
+    const primary = url || TMDB_POSTER_FALLBACK;
+    const direct = toDirectTmdbUrl(primary, 'w342') || primary;
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'decoding="async"';
-    return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" onError="this.onerror=null; this.src='${TMDB_POSTER_FALLBACK}';" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+}
+
+function brandLogoSvgMarkup(universe) {
+    if (universe === 'MOVIES') {
+        return `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">
+  <defs>
+    <linearGradient id="filmGradMark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/><stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="goldGradMark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="rgba(220,38,38,0.15)" stroke="url(#filmGradMark)" stroke-width="1.5"/>
+  <ellipse cx="50" cy="52" rx="42" ry="22" fill="none" stroke="url(#goldGradMark)" stroke-width="3.5" transform="rotate(-22 50 52)" opacity="0.95"/>
+  <rect x="22" y="38" width="38" height="28" rx="6" fill="url(#filmGradMark)" stroke="#fbbf24" stroke-width="1.5"/>
+  <polygon points="60,44 76,35 76,69 60,60" fill="url(#filmGradMark)" stroke="#fbbf24" stroke-width="1.5"/>
+  <circle cx="33" cy="29" r="9" fill="#120505" stroke="url(#goldGradMark)" stroke-width="2.5"/>
+  <circle cx="33" cy="29" r="3" fill="#fbbf24"/>
+  <circle cx="51" cy="29" r="9" fill="#120505" stroke="url(#goldGradMark)" stroke-width="2.5"/>
+  <circle cx="51" cy="29" r="3" fill="#fbbf24"/>
+  <polygon points="37,45 37,59 50,52" fill="#ffffff"/>
+</svg>`;
+    }
+    return `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" aria-hidden="true">
+  <defs>
+    <linearGradient id="diziGradMark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f0ff"/><stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="rgba(59,130,246,0.15)" stroke="url(#diziGradMark)" stroke-width="1.5"/>
+  <path d="M 40 76 L 60 76 L 66 85 L 34 85 Z" fill="url(#diziGradMark)"/>
+  <rect x="16" y="26" width="68" height="48" rx="10" fill="#050a12" stroke="url(#diziGradMark)" stroke-width="3"/>
+  <line x1="38" y1="26" x2="26" y2="12" stroke="#00f0ff" stroke-width="3" stroke-linecap="round"/>
+  <line x1="62" y1="26" x2="74" y2="12" stroke="#00f0ff" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="26" cy="12" r="3" fill="#00f0ff"/>
+  <circle cx="74" cy="12" r="3" fill="#00f0ff"/>
+  <polygon points="36,37 36,61 54,49" fill="url(#diziGradMark)"/>
+</svg>`;
 }
 
 function setBrandLogo(universe) {
-    const brandLogoImg = document.getElementById('brand-logo-img');
-    if (!brandLogoImg) return;
-    const isMovies = universe === 'MOVIES';
-    const primary = isMovies ? 'assets/logo_filmimibul.svg' : 'assets/logo_dizimibul.svg';
-    const fallback = isMovies ? LOGO_FALLBACK_MOVIES : LOGO_FALLBACK_SERIES;
-    brandLogoImg.onerror = function () {
-        this.onerror = null;
-        this.src = fallback;
-    };
-    brandLogoImg.src = primary;
-    brandLogoImg.style.filter = isMovies
-        ? 'drop-shadow(0 0 10px rgba(249, 115, 22, 0.65))'
-        : 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.65))';
+    const mark = document.getElementById('brand-logo-img');
+    if (!mark) return;
+    mark.innerHTML = brandLogoSvgMarkup(universe === 'MOVIES' ? 'MOVIES' : 'SERIES');
 }
 
 function isValidTrailerUrl(url) {
