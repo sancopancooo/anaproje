@@ -80,6 +80,45 @@ const POSTER_EMPTY_SVG = "data:image/svg+xml," + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513" viewBox="0 0 342 513"><rect fill="#120f1a" width="342" height="513"/></svg>'
 );
 let _renderCardsToken = 0;
+let _posterRetryTimers = [];
+if (typeof window._posterOkByPath === 'undefined') window._posterOkByPath = {};
+if (typeof window._exploreViewCache === 'undefined') {
+    window._exploreViewCache = {
+        MOVIES: { key: '', html: '', countText: '', totalPages: 1 },
+        SERIES: { key: '', html: '', countText: '', totalPages: 1 }
+    };
+}
+
+function clearPosterRetryTimers() {
+    _posterRetryTimers.forEach((t) => clearTimeout(t));
+    _posterRetryTimers = [];
+}
+
+function posterPathKey(rawUrl) {
+    const direct = toDirectTmdbUrl(String(rawUrl || '').trim(), 'w342');
+    return extractTmdbImagePath(direct) || String(rawUrl || '').trim();
+}
+
+function invalidateExploreViewCache(universe) {
+    if (!window._exploreViewCache) return;
+    if (universe === 'MOVIES' || universe === 'SERIES') {
+        window._exploreViewCache[universe] = { key: '', html: '', countText: '', totalPages: 1 };
+    } else {
+        window._exploreViewCache.MOVIES = { key: '', html: '', countText: '', totalPages: 1 };
+        window._exploreViewCache.SERIES = { key: '', html: '', countText: '', totalPages: 1 };
+    }
+}
+
+function buildExploreViewCacheKey(universe, sidebarOpts, activeSearchQuery, page, perPage, sortOption, searchSensitivity, userLibIds) {
+    const libSig = [...(userLibIds || [])].sort().join(',').slice(0, 200);
+    const o = sidebarOpts || {};
+    return [
+        universe, page, perPage, sortOption, searchSensitivity,
+        o.minRating, o.minYear, o.maxSeasons, o.minVotes, o.onlyEnded ? 1 : 0,
+        o.selectedLanguage, o.selectedGenre, o.selectedPlatform,
+        activeSearchQuery || '', libSig
+    ].join('|');
+}
 
 function getApiBaseUrl() {
     return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
@@ -162,68 +201,83 @@ function optimizeTmdbBackdropUrl(url) {
 
 function buildPosterSrcChain(rawUrl) {
     const raw = String(rawUrl || '').trim();
-    if (!raw) return [];
+    if (!raw) return { primary: POSTER_EMPTY_SVG, mirror: '', proxy: '', pathKey: '' };
     const direct = toDirectTmdbUrl(raw, 'w342') || (isTmdbImageHost(raw) ? raw : '');
-    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
     const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
+    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
     const tmdb = (direct && isTmdbImageHost(direct)) ? direct : '';
-    // Kendi backend proxy en güvenilir; ardından weserv, en son direkt TMDB
-    return [...new Set([proxy, weserv, tmdb, raw].filter(Boolean))];
+    const pathKey = posterPathKey(raw);
+    const cachedOk = (pathKey && window._posterOkByPath[pathKey]) ? window._posterOkByPath[pathKey] : '';
+    // Önce daha önce yüklenmiş URL, sonra weserv/tmdb (hızlı), en son backend proxy
+    const primary = cachedOk || weserv || tmdb || proxy || raw;
+    const alts = [weserv, tmdb, proxy, raw].filter((u) => u && u !== primary);
+    return { primary, mirror: alts[0] || '', proxy: alts[1] || '', pathKey };
 }
 
 function resolvePosterUrl(item) {
     if (!item) return POSTER_EMPTY_SVG;
     const raw = String(item.poster_url || item.afis_url || '').trim();
     if (!raw) return POSTER_EMPTY_SVG;
-    const chain = buildPosterSrcChain(raw);
-    return chain[0] || optimizeTmdbPosterUrl(raw);
+    return buildPosterSrcChain(raw).primary || optimizeTmdbPosterUrl(raw);
 }
 
-window.__posterImgError = function (img) {
-    if (!img) return;
-    let candidates = [];
-    try { candidates = JSON.parse(img.getAttribute('data-candidates') || '[]'); } catch (_) { /* ignore */ }
-    const idx = parseInt(img.dataset.candidateIdx || '0', 10);
+window.__posterImgLoad = function (img) {
+    if (!img || !img.src || String(img.src).startsWith('data:')) return;
+    const pathKey = img.getAttribute('data-poster-key') || '';
+    if (pathKey) window._posterOkByPath[pathKey] = img.currentSrc || img.src;
+};
 
-    if (candidates.length && idx + 1 < candidates.length) {
-        img.dataset.candidateIdx = String(idx + 1);
-        img.src = candidates[idx + 1];
+window.__posterImgError = function (img) {
+    if (!img || !img.isConnected) return;
+    const mirror = img.getAttribute('data-mirror') || '';
+    const proxy = img.getAttribute('data-proxy') || '';
+    const primary = img.getAttribute('data-primary') || '';
+    const pathKey = img.getAttribute('data-poster-key') || '';
+
+    if (mirror && !img.dataset.triedMirror) {
+        img.dataset.triedMirror = '1';
+        img.src = mirror;
+        return;
+    }
+    if (proxy && !img.dataset.triedProxy) {
+        img.dataset.triedProxy = '1';
+        img.src = proxy;
         return;
     }
 
     const retries = parseInt(img.dataset.retryCount || '0', 10);
-    if (candidates.length && retries < 3) {
+    if (primary && retries < 2) {
         img.dataset.retryCount = String(retries + 1);
-        img.dataset.candidateIdx = '0';
-        const bust = candidates[0] + (candidates[0].includes('?') ? '&' : '?') + '_r=' + Date.now();
-        setTimeout(() => { img.src = bust; }, 400 * (retries + 1));
+        img.dataset.triedMirror = '';
+        img.dataset.triedProxy = '';
+        const tid = setTimeout(() => {
+            if (img.isConnected) {
+                img.src = primary + (primary.includes('?') ? '&' : '?') + '_r=' + Date.now();
+            }
+        }, 450 * (retries + 1));
+        _posterRetryTimers.push(tid);
         return;
     }
 
-    // Tüm kaynaklar tükendi — çakma Unsplash yerine koyu kutu bırak
     img.onerror = null;
     img.classList.add('poster-missing');
+    if (pathKey) delete window._posterOkByPath[pathKey];
     if (img.src !== POSTER_EMPTY_SVG) img.src = POSTER_EMPTY_SVG;
 };
 
-/** Kart afişleri: backend proxy → weserv → direkt TMDB (çakma placeholder yok) */
+/** Kart afişleri: önbellek → weserv → TMDB → proxy */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
-    const raw = String(url || '').trim();
-    const candidates = buildPosterSrcChain(raw);
-    const primary = candidates[0] || POSTER_EMPTY_SVG;
-    const candidatesAttr = safeImageSrc(JSON.stringify(candidates));
+    const { primary, mirror, proxy, pathKey } = buildPosterSrcChain(url);
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-candidate-idx="0" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" onload="window.__posterImgLoad(this)" onError="window.__posterImgError(this)" />`;
 }
 
 /** Küçük afiş önizlemeleri (manuel arama, karşılaştırma vb.) */
 function posterThumbHtml(rawUrl, style) {
-    const candidates = buildPosterSrcChain(rawUrl);
-    const primary = candidates[0] || POSTER_EMPTY_SVG;
-    const candidatesAttr = safeImageSrc(JSON.stringify(candidates));
+    const { primary, mirror, proxy, pathKey } = buildPosterSrcChain(rawUrl);
     const css = style || 'width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);';
-    return `<img src="${safeImageSrc(primary)}" style="${css}" referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-candidate-idx="0" onError="window.__posterImgError(this)" />`;
+    return `<img src="${safeImageSrc(primary)}" style="${css}" referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" onload="window.__posterImgLoad(this)" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -239,17 +293,16 @@ function bindLandingHeroReady() {
     hero.addEventListener('error', markReady, { once: true });
 }
 
-/** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
+/** Evren değişince async render yarışını iptal et; DOM'u silme (evren cache korunsun). */
 function resetExploreCardsForUniverseSwitch() {
     _renderCardsToken += 1;
     currentPage = 1;
+    clearPosterRetryTimers();
     if (_renderCardsDebounceTimer) {
         clearTimeout(_renderCardsDebounceTimer);
         _renderCardsDebounceTimer = null;
     }
-    const cardsContainer = document.getElementById('cards-container');
     const resultsCountText = document.getElementById('results-count-text');
-    if (cardsContainer) cardsContainer.innerHTML = '';
     if (resultsCountText) resultsCountText.textContent = '';
 }
 
@@ -2442,6 +2495,18 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
+    const viewCacheKey = buildExploreViewCacheKey(
+        universeSnapshot, sidebarOpts, activeSearchQuery,
+        currentPage, perPage, sortOption, searchSensitivity, userLibIds
+    );
+    const cachedView = window._exploreViewCache[universeSnapshot];
+    if (cachedView && cachedView.key === viewCacheKey && cachedView.html) {
+        cardsContainer.innerHTML = cachedView.html;
+        if (resultsCountText && cachedView.countText) resultsCountText.textContent = cachedView.countText;
+        renderExplorePagination(cachedView.totalPages || totalPages);
+        return;
+    }
+
     // 4. Kartları anında toptan boya
     const showCardBackdrops = false;
     const isMoviesView = universeSnapshot === 'MOVIES';
@@ -2533,6 +2598,12 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
+        window._exploreViewCache[universeSnapshot] = {
+            key: viewCacheKey,
+            html: cardsContainer.innerHTML,
+            countText: resultsCountText ? resultsCountText.textContent : '',
+            totalPages
+        };
     };
 
     paintCards();
@@ -3909,6 +3980,7 @@ function addToLibraryFromExplore(itemId) {
 
     showToast(`✅ <strong>${foundItem.title}</strong> kitaplığınıza eklendi!`, 1800);
     markAIRecNeedsRefresh();
+    invalidateExploreViewCache(currentUniverse);
     window.BACKEND_REC_CACHE = {};
     window._libraryNeedsRefresh = true;
     if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
@@ -4326,6 +4398,7 @@ function removeFromLibrary(itemId) {
         }
         showToast(`🗑️ Yapım kitaplıktan silindi.`, 1800);
         markAIRecNeedsRefresh();
+        invalidateExploreViewCache(currentUniverse);
         window.BACKEND_REC_CACHE = {};
         if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
         updateLibraryUI();
@@ -4505,6 +4578,7 @@ function handleSaveManualEntry() {
 
     showToast(`✅ <strong>${foundItem.title}</strong> kitaplığınıza (${finalStatus}) eklendi!`, 2200);
     markAIRecNeedsRefresh();
+    invalidateExploreViewCache(currentUniverse);
     window.BACKEND_REC_CACHE = {};
     if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
     if (inputSearch) inputSearch.value = '';
@@ -5584,6 +5658,7 @@ function setAIOnlyEndedPref(value) {
     const username = CURRENT_USER && CURRENT_USER !== 'Kullanıcı' ? CURRENT_USER.toLowerCase() : 'guest';
     localStorage.setItem(`AI_ONLY_ENDED_${username}`, value ? '1' : '0');
     markAIRecNeedsRefresh();
+    invalidateExploreViewCache(currentUniverse);
     window.BACKEND_REC_CACHE = {};
     window.CURRENT_REC_STATE = { visible: [], overflowQueue: [], isMovie: currentUniverse === 'MOVIES' };
     clearPersistedAIRecCache(currentUniverse);
@@ -6175,6 +6250,7 @@ function generateAIRecommendations() {
 
 function forceRefreshAIRecommendations() {
     markAIRecNeedsRefresh();
+    invalidateExploreViewCache(currentUniverse);
     window.BACKEND_REC_CACHE = {};
     clearPersistedAIRecCache(currentUniverse);
     generateAIRecommendations();
@@ -6334,14 +6410,16 @@ function openItemDetailModal(itemId) {
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
         posterElem.onerror = function () { window.__posterImgError(this); };
-        delete posterElem.dataset.candidateIdx;
+        posterElem.onload = function () { window.__posterImgLoad(this); };
+        delete posterElem.dataset.triedMirror;
+        delete posterElem.dataset.triedProxy;
         delete posterElem.dataset.retryCount;
-        const candidates = buildPosterSrcChain(item.poster_url || item.afis_url);
-        posterElem.setAttribute('data-candidates', JSON.stringify(candidates));
-        posterElem.removeAttribute('data-mirror');
-        posterElem.removeAttribute('data-proxy');
-        posterElem.removeAttribute('data-fallback');
-        posterElem.src = candidates[0] || POSTER_EMPTY_SVG;
+        const chain = buildPosterSrcChain(item.poster_url || item.afis_url);
+        posterElem.setAttribute('data-primary', chain.primary);
+        posterElem.setAttribute('data-poster-key', chain.pathKey);
+        posterElem.setAttribute('data-mirror', chain.mirror);
+        posterElem.setAttribute('data-proxy', chain.proxy);
+        posterElem.src = chain.primary || POSTER_EMPTY_SVG;
     }
     if (titleElem) titleElem.textContent = item.title;
 
