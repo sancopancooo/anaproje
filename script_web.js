@@ -69,12 +69,14 @@ const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24
 
 function optimizeTmdbPosterUrl(url) {
     if (!url || !String(url).includes('image.tmdb.org')) return url;
-    return String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w342/').replace(/\/t\/p\/original\//, '/t/p/w342/');
+    const cleanUrl = String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w342/').replace(/\/t\/p\/original\//, '/t/p/w342/');
+    return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}`;
 }
 
 function optimizeTmdbBackdropUrl(url) {
     if (!url || !String(url).includes('image.tmdb.org')) return url;
-    return String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w780/').replace(/\/t\/p\/original\//, '/t/p/w780/');
+    const cleanUrl = String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w780/').replace(/\/t\/p\/original\//, '/t/p/w780/');
+    return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}`;
 }
 
 function resolvePosterUrl(item) {
@@ -4136,7 +4138,7 @@ function handleManualSearchInput(inputEl) {
             return `
                 <div class="manual-dropdown-item" onclick="selectManualDropdownItem('${item.id}', '${escapeQuotes(item.title)}', ${inLib})" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(22, 18, 42, 0.98); transition: background 0.2s ease;">
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <img src="${item.poster_url}" style="width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                        <img src="${resolvePosterUrl(item)}" style="width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
                         <div>
                             <div style="font-weight: 800; color: #fff; font-size: 0.9rem;">${item.title}</div>
                             <div style="font-size: 0.75rem; color: #9ca3af;">${item.year || ''} · ${Array.isArray(item.genres) ? item.genres.slice(0, 2).join(', ') : (item.genres || '')}</div>
@@ -6506,7 +6508,7 @@ function runVersusComparison() {
         <div style="display:grid; grid-template-columns:1fr 60px 1fr; gap:10px; align-items:start;">
             <!-- Item 1 -->
             <div style="background:rgba(167,139,250,0.08); border:2px solid rgba(167,139,250,0.3); border-radius:16px; padding:16px; text-align:center;">
-                <img src="${item1.poster_url}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
+                <img src="${resolvePosterUrl(item1)}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
                 <div style="font-weight:800; color:#fff; font-size:1rem;">${item1.title}</div>
                 <div style="font-size:0.78rem; color:#a78bfa; margin-top:4px;">${g1.slice(0,2).join(' · ') || ''}</div>
             </div>
@@ -6516,7 +6518,7 @@ function runVersusComparison() {
             </div>
             <!-- Item 2 -->
             <div style="background:rgba(249,115,22,0.08); border:2px solid rgba(249,115,22,0.3); border-radius:16px; padding:16px; text-align:center;">
-                <img src="${item2.poster_url}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
+                <img src="${resolvePosterUrl(item2)}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
                 <div style="font-weight:800; color:#fff; font-size:1rem;">${item2.title}</div>
                 <div style="font-size:0.78rem; color:#f97316; margin-top:4px;">${g2.slice(0,2).join(' · ') || ''}</div>
             </div>

@@ -3637,6 +3637,45 @@ def list_user_feedback():
         return jsonify({'error': 'Geri bildirimler okunamadı.', 'detail': str(e)}), 500
 
 
+@app.route('/api/tmdb-image', methods=['GET'])
+def tmdb_image_proxy():
+    import requests
+    from flask import Response
+    
+    img_path = request.args.get('path', '')
+    size = request.args.get('size', 'w342')
+    
+    if not img_path:
+        return "Missing 'path' parameter", 400
+        
+    # Standartlaştırma (başında / olduğundan emin olma)
+    if not img_path.startswith('/'):
+        img_path = '/' + img_path
+        
+    # Güvenli karakter denetimi
+    if not re.match(r'^/[a-zA-Z0-9_\-\./]+$', img_path):
+        return "Invalid path format", 400
+        
+    tmdb_url = f"https://image.tmdb.org/t/p/{size}{img_path}"
+    
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        res = requests.get(tmdb_url, headers=headers, stream=True, timeout=10)
+        if res.status_code != 200:
+            return f"Failed to fetch image from TMDB: status {res.status_code}", res.status_code
+            
+        content_type = res.headers.get('Content-Type', 'image/jpeg')
+        response_headers = {
+            'Content-Type': content_type,
+            'Cache-Control': 'public, max-age=31536000'
+        }
+        return Response(res.content, headers=response_headers)
+    except Exception as e:
+        return f"Proxy error: {str(e)}", 500
+
+
 @app.route('/', methods=['GET', 'HEAD'])
 def root():
     return jsonify({
