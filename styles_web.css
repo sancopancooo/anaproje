@@ -668,10 +668,6 @@ body.theme-blue .card-backdrop-banner__fade {
     object-position: center;
 }
 
-.card-poster-img.is-poster-pending {
-    opacity: 0;
-}
-
 .card-right-details {
     flex: 1;
     display: flex;
