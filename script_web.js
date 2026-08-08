@@ -2599,9 +2599,9 @@ function renderContentCards() {
     };
 
     if (useReadyGate) {
-        cardsContainer.innerHTML = '';
-        const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
-        waitExploreReadyBlank(posterUrls, isMoviesView).then(paintCards);
+        // Eski hızlı davranış: kartları anında toptan boya (yapay 2-3 sn bekleme yok)
+        paintCards();
+        hideExploreBootMask();
         return;
     }
 
