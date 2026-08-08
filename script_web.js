@@ -166,19 +166,39 @@ function resolvePosterUrl(item) {
 
 window.__posterImgError = function (img) {
     if (!img) return;
+    const primary = img.getAttribute('data-primary') || '';
     const mirror = img.getAttribute('data-mirror') || '';
     const proxy = img.getAttribute('data-proxy') || '';
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+
+    // 1) weserv aynası
     if (mirror && !img.dataset.triedMirror) {
         img.dataset.triedMirror = '1';
         img.src = mirror;
         return;
     }
+    // 2) render proxy
     if (proxy && !img.dataset.triedProxy) {
         img.dataset.triedProxy = '1';
         img.src = proxy;
         return;
     }
+    // 3) Kendi kendini onaran tekrar: ilk boyada çok sayıda afiş aynı anda
+    //    yüklenince bazıları geçici olarak hata verip placeholder'a düşüyordu
+    //    (evren geçişinde re-render ile düzeliyordu). Placeholder'a düşmeden
+    //    önce gerçek kaynakları birkaç kez yeniden dene.
+    const retries = parseInt(img.dataset.retryCount || '0', 10);
+    if (primary && retries < 3) {
+        img.dataset.retryCount = String(retries + 1);
+        img.dataset.triedMirror = '';
+        img.dataset.triedProxy = '';
+        const delay = 350 * (retries + 1);
+        setTimeout(() => {
+            img.src = primary + (primary.includes('?') ? '&' : '?') + '_r=' + Date.now();
+        }, delay);
+        return;
+    }
+    // 4) Her şey başarısız → placeholder
     img.onerror = null;
     if (img.src !== fallback) img.src = fallback;
 };
@@ -195,7 +215,7 @@ function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fe
     const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -2491,10 +2511,9 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
-    // 4. Giriş/evren değişiminde: 2–3 sn boş bekleyip kapaklar hazır olunca toptan boya
+    // 4. Kartları anında boya (afişler kendi kendine yüklenir/tekrar dener)
     const showCardBackdrops = false;
     const isMoviesView = universeSnapshot === 'MOVIES';
-    const useReadyGate = _exploreReadyGate;
     _exploreReadyGate = false;
 
     const paintCards = () => {
@@ -2516,7 +2535,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false, cardIdx < 6 ? 'high' : 'auto')}
+                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', cardIdx >= 4, cardIdx < 4 ? 'high' : 'auto')}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -2587,24 +2606,13 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
-        // DOM'daki afişler decode olana kadar maskeyi tut (placeholder flaşı olmasın)
-        const imgs = [...cardsContainer.querySelectorAll('.card-poster-img')];
-        Promise.all(imgs.map((img) => {
-            if (img.complete && img.naturalWidth > 0) return Promise.resolve();
-            return img.decode().catch(() => new Promise((res) => {
-                img.addEventListener('load', res, { once: true });
-                img.addEventListener('error', res, { once: true });
-            }));
-        })).finally(() => hideExploreBootMask());
+        // Kartlar DOM'a girdi; maskeyi hemen kaldır (afişler kendi kendine
+        // yüklenir, hata olursa __posterImgError tekrar dener)
+        hideExploreBootMask();
     };
 
-    if (useReadyGate) {
-        // Eski hızlı davranış: kartları anında toptan boya (yapay 2-3 sn bekleme yok)
-        paintCards();
-        hideExploreBootMask();
-        return;
-    }
-
+    // Kartları anında toptan boya (yapay 2-3 sn bekleme yok); paintCards
+    // maskeyi kendisi kaldırır, afiş hatalarında __posterImgError devreye girer
     paintCards();
 }
 
