@@ -143,13 +143,26 @@ function resolvePosterUrl(item) {
     return optimizeTmdbPosterUrl(raw);
 }
 
+function toWeservTmdbUrl(url, size) {
+    const direct = toDirectTmdbUrl(url, size);
+    if (!direct || !direct.includes('image.tmdb.org')) return '';
+    // CDN yedek: TMDB engelli ağlarda Render'dan genelde daha hızlı
+    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${size === 'w780' ? 780 : 342}&output=webp`;
+}
+
 window.__posterImgError = function (img) {
     if (!img) return;
     const proxy = img.getAttribute('data-proxy') || '';
+    const mirror = img.getAttribute('data-mirror') || '';
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+    // Tek görsel için zincir; global preferTmdbProxy'yi kirletme (tüm listeyi yavaşlatır)
+    if (mirror && !img.dataset.triedMirror) {
+        img.dataset.triedMirror = '1';
+        img.src = mirror;
+        return;
+    }
     if (proxy && !img.dataset.triedProxy) {
         img.dataset.triedProxy = '1';
-        preferTmdbProxy = true;
         img.src = proxy;
         return;
     }
@@ -161,16 +174,55 @@ window.__posterImgError = function (img) {
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
     const resolved = url || TMDB_POSTER_FALLBACK;
     const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
+    const mirror = toWeservTmdbUrl(direct, 'w342');
     const proxy = toProxiedTmdbUrl(direct, 'w342');
-    const primary = preferTmdbProxy && proxy ? proxy : (direct.includes('image.tmdb.org') ? direct : resolved);
+    const primary = preferTmdbProxy
+        ? (proxy || mirror || direct)
+        : (direct.includes('image.tmdb.org') ? direct : resolved);
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+}
+
+/** Görselleri paralel ön-yükle; timeout'ta boyamaya devam et (sonsuz bekleme yok). */
+function preloadImages(urls, timeoutMs = 3500) {
+    const list = [...new Set((urls || []).filter(Boolean))];
+    if (!list.length) return Promise.resolve();
+    return new Promise((resolve) => {
+        let left = list.length;
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        list.forEach((url) => {
+            const img = new Image();
+            const one = () => {
+                left -= 1;
+                if (left <= 0) finish();
+            };
+            img.onload = one;
+            img.onerror = one;
+            img.referrerPolicy = 'no-referrer';
+            img.src = url;
+        });
+    });
+}
+
+function exploreLoadingHtml(message) {
+    return `
+        <div style="grid-column:1/-1;text-align:center;padding:36px 16px;color:#c4b5fd;font-weight:700;">
+            <div style="width:46px;height:46px;border:3px solid rgba(168,85,247,0.25);border-top-color:#facc15;border-radius:50%;animation:spin 0.75s linear infinite;margin:0 auto 14px;"></div>
+            ${escapeHtml(message || 'Kapaklar hazırlanıyor…')}
+        </div>`;
 }
 
 /**
  * TMDB erişimini hap seçilince ölç (landing'i dondurmaz).
- * Engelliysa proxy'ye geç; değilse doğrudan CDN kullan.
+ * Sadece gerçek hata (onerror) olursa proxy'ye geç — yavaşlıkta proxy'ye zorlama.
  */
 function warmImagePipeline() {
     if (warmImagePipeline._started) return;
@@ -194,7 +246,8 @@ function warmImagePipeline() {
             }
         }
     };
-    const timer = setTimeout(() => finish(true), 1500);
+    // Timeout'ta proxy'ye düşME — yavaş ama çalışan TMDB'yi bozma
+    const timer = setTimeout(() => finish(false), 4000);
     probe.onload = () => {
         clearTimeout(timer);
         finish(false);
@@ -204,6 +257,19 @@ function warmImagePipeline() {
         finish(true);
     };
     probe.src = `https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg?_=${Date.now()}`;
+}
+
+/** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
+function bindLandingHeroReady() {
+    const hero = document.querySelector('.hero-split-image');
+    if (!hero) return;
+    const markReady = () => hero.classList.add('is-ready');
+    if (hero.complete && hero.naturalWidth > 0) {
+        markReady();
+        return;
+    }
+    hero.addEventListener('load', markReady, { once: true });
+    hero.addEventListener('error', markReady, { once: true });
 }
 
 /** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
@@ -2410,14 +2476,18 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
-    cardsContainer.innerHTML = '';
-
-    // 4. Kartların DOM'a Eklenmesi — afişler doğrudan TMDB CDN'den (proxy yedek)
+    // 4. Önce kapakları ısıt, sonra kartları tek seferde boya (placeholder yağmuru olmasın)
     const showCardBackdrops = false;
-    const fragment = document.createDocumentFragment();
     const isMoviesView = universeSnapshot === 'MOVIES';
+    const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
+    cardsContainer.innerHTML = exploreLoadingHtml('Kapaklar hazırlanıyor…');
 
-    paginatedItems.forEach((item, cardIdx) => {
+    (async () => {
+        await preloadImages(posterUrls, 3200);
+        if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
+
+        const fragment = document.createDocumentFragment();
+        paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
@@ -2499,7 +2569,9 @@ function renderContentCards() {
 
         fragment.appendChild(card);
     });
-    cardsContainer.appendChild(fragment);
+        cardsContainer.innerHTML = '';
+        cardsContainer.appendChild(fragment);
+    })();
 }
 
 
@@ -5390,20 +5462,34 @@ function renderAIRecommendationsCards(recsPayload, userQuery, container, isMovie
         ? ((typeof REAL_MOVIES_DATA !== 'undefined') ? REAL_MOVIES_DATA : SAMPLE_MOVIES)
         : ((typeof REAL_SERIES_DATA !== 'undefined') ? REAL_SERIES_DATA : SAMPLE_SERIES);
 
-    let html = `<div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px;">`;
-
-    visibleItems.forEach(item => {
+    if (!renderAIRecommendationsCards._token) renderAIRecommendationsCards._token = 0;
+    const paintToken = ++renderAIRecommendationsCards._token;
+    const prepared = visibleItems.map(item => {
         const candidate = item.candidate || item;
         const fullData = getMediaItemFullDetails(candidate, dataset) || candidate;
-
-        const score = candidate.aiMatchScore || candidate.score || 85;
-        const reason = candidate.aiReason || candidate.reasonText || 'Kütüphanenizle yüksek yapay zeka uyumu.';
-
-        html += `<div id="ai-rec-card-${candidate.id}">${buildAICardHTML(fullData, score, reason, isMovie)}</div>`;
+        return {
+            candidate,
+            fullData,
+            score: candidate.aiMatchScore || candidate.score || 85,
+            reason: candidate.aiReason || candidate.reasonText || 'Kütüphanenizle yüksek yapay zeka uyumu.'
+        };
     });
 
-    html += `</div>`;
-    container.innerHTML = html;
+    container.innerHTML = exploreLoadingHtml('AI öneri kapakları hazırlanıyor…');
+    const preloadUrls = prepared.flatMap(({ fullData }) => [
+        resolvePosterUrl(fullData),
+        fullData.backdrop_url ? optimizeTmdbBackdropUrl(fullData.backdrop_url) : ''
+    ].filter(Boolean));
+
+    preloadImages(preloadUrls, 4000).then(() => {
+        if (paintToken !== renderAIRecommendationsCards._token) return;
+        let html = `<div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 16px;">`;
+        prepared.forEach(({ candidate, fullData, score, reason }) => {
+            html += `<div id="ai-rec-card-${candidate.id}">${buildAICardHTML(fullData, score, reason, isMovie)}</div>`;
+        });
+        html += `</div>`;
+        container.innerHTML = html;
+    });
 }
 
 function handleInstantSlotSwap(itemId, buttonEl) {
@@ -9553,6 +9639,7 @@ let ORIGINAL_LIBRARY_TAB_HTML = '';
    🚀 UYGULAMA BAŞLATMA
    ========================================================================== */
 document.addEventListener('DOMContentLoaded', () => {
+    bindLandingHeroReady();
     loadRegisteredAccounts();
     const sTab = document.getElementById('tab-social');
     const fTab = document.getElementById('tab-feedback');

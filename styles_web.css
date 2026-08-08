@@ -88,8 +88,18 @@ body {
     height: 100%; 
     object-fit: cover; 
     object-position: center 8%; 
-    opacity: 0.92;
+    opacity: 0;
     filter: contrast(1.08) brightness(0.98);
+    transition: opacity 0.45s ease;
+}
+
+/* Progressive JPEG yarım boyanmasın — tam decode sonrası göster */
+.hero-split-image.is-ready {
+    opacity: 0.92;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 
 .center-divider-line {

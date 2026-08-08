@@ -10,15 +10,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="preconnect" href="https://image.tmdb.org" crossorigin>
     <link rel="dns-prefetch" href="https://image.tmdb.org">
+    <link rel="preconnect" href="https://images.weserv.nl" crossorigin>
+    <link rel="dns-prefetch" href="https://images.weserv.nl">
     <link rel="preconnect" href="https://anaproje-81ph.onrender.com" crossorigin>
     <link rel="dns-prefetch" href="https://anaproje-81ph.onrender.com">
+    <link rel="preload" as="image" href="morpheus_walter_split.jpg" fetchpriority="high">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Montserrat:wght@700;800;900&display=swap" rel="stylesheet">
     <!-- FontAwesome Icon Set -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js Grafikler Kütüphanesi -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Ana Stil Dosyası -->
-    <link rel="stylesheet" href="styles_web.css?v=logo-inline-114">
+    <link rel="stylesheet" href="styles_web.css?v=ready-gate-120">
 </head>
 <body>
     <!-- 🔔 SAĞ ÜST KÖŞE ENGELLEYİCİ OLMAYAN BİLDİRİM KONTEYNERİ -->
@@ -37,7 +40,7 @@
         
         <!-- Merkeze Yerleştirilen Ortadan Bölünmüş Ana Karakter Görseli -->
         <div class="split-hero-bg">
-            <img src="morpheus_walter_split.jpg" alt="Matrix Split Visual" class="hero-split-image" />
+            <img src="morpheus_walter_split.jpg" alt="Matrix Split Visual" class="hero-split-image" fetchpriority="high" decoding="async" />
             <div class="center-divider-line"></div>
         </div>
 
@@ -1103,6 +1106,6 @@
     <!-- Gerçek Dizi & Film Veri Deposu -->
     <script src="data_store.js?v=85"></script>
     <!-- Uygulama Scripti -->
-    <script src="script_web.js?v=118"></script>
+    <script src="script_web.js?v=120"></script>
 </body>
 </html>
