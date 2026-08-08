@@ -4414,6 +4414,7 @@ function clearEntireLibrary() {
             saveUserData(CURRENT_USER);
         }
         showToast('🧹 Kitaplığınız tamamen sıfırlandı.', 2000);
+        invalidateExploreViewCache();
         window.BACKEND_REC_CACHE = {};
         if (typeof clearPersistedAIRecCache === 'function') {
             clearPersistedAIRecCache('SERIES');
