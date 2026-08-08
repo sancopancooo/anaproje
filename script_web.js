@@ -6352,11 +6352,14 @@ function openItemDetailModal(itemId) {
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
         posterElem.onerror = function () { window.__posterImgError(this); };
+        delete posterElem.dataset.triedMirror;
+        delete posterElem.dataset.triedProxy;
         const rawPoster = String(item.poster_url || item.afis_url || '').trim();
         const directPoster = toDirectTmdbUrl(rawPoster, 'w342') || rawPoster;
-        posterElem.setAttribute('data-direct', directPoster || '');
+        posterElem.setAttribute('data-mirror', toWeservTmdbUrl(directPoster, 'w342') || '');
+        posterElem.setAttribute('data-proxy', toProxiedTmdbUrl(directPoster, 'w342') || '');
         posterElem.setAttribute('data-fallback', TMDB_POSTER_FALLBACK);
-        posterElem.removeAttribute('data-proxy');
+        posterElem.removeAttribute('data-direct');
         posterElem.src = resolvePosterUrl(item);
     }
     if (titleElem) titleElem.textContent = item.title;
