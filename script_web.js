@@ -852,7 +852,10 @@ function isUserLoggedInStrict() {
 async function ensureSignedAuthToken() {
     if (!isUserLoggedInStrict()) return '';
     const existing = getSignedAuthToken();
-    if (existing && existing.includes('.')) return existing;
+    if (existing && existing.includes('.')) {
+        refreshAdminSessionFromServer().catch(() => {});
+        return existing;
+    }
 
     const username = CURRENT_USER;
     loadRegisteredAccounts();
@@ -9044,6 +9047,7 @@ async function performLogin() {
                 serverSynced = true;
             }
             setAdminSessionFlag(!!data.isAdmin);
+            await refreshAdminSessionFromServer();
         }
     } catch(e) {}
 
