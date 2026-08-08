@@ -879,6 +879,9 @@ async function ensureSignedAuthToken() {
         const data = await res.json();
         if (data.token) {
             localStorage.setItem(`MATRIX_SIGNED_TOKEN_${username.toLowerCase()}`, data.token);
+            if (typeof data.isAdmin !== 'undefined') {
+                setAdminSessionFlag(!!data.isAdmin);
+            }
             return data.token;
         }
     } catch (e) {}
@@ -2275,6 +2278,7 @@ function setupTabNavigation() {
         item.addEventListener('click', () => {
             const targetTabId = item.getAttribute('data-tab');
             if (!targetTabId) return;
+            if (targetTabId === 'tab-admin-inbox' && (!IS_ADMIN_SESSION || !isUserLoggedInStrict())) return;
 
             // Önce sekmeyi göster — ağır DOM işi bir sonraki tick'te (donma azalır)
             navItems.forEach(n => n.classList.remove('active'));
@@ -2321,6 +2325,10 @@ function setupTabNavigation() {
 
                 if (targetTabId === 'tab-recommender') {
                     renderAIRecommenderUI();
+                }
+
+                if (targetTabId === 'tab-admin-inbox' && IS_ADMIN_SESSION) {
+                    renderAdminInboxUI(true);
                 }
             };
 
@@ -7653,10 +7661,6 @@ let LIKED_MOVIES_IDS = ['tt1375666'];
 let HIDDEN_SERIES_IDS = ['series_02']; 
 let HIDDEN_MOVIES_IDS = [];
 
-let FEEDBACK_LOGS = [
-    { id: 1, username: 'sancopancoo', message: 'test123 -admin', date: '2026-07-10 21:45:12' }
-];
-
 let currentLikedPage = 1;
 let currentHiddenPage = 1;
 const PREF_PER_PAGE = 5;
@@ -7674,7 +7678,6 @@ const DEFAULT_LIKED_SERIES_IDS = [...LIKED_SERIES_IDS];
 const DEFAULT_LIKED_MOVIES_IDS = [...LIKED_MOVIES_IDS];
 const DEFAULT_HIDDEN_SERIES_IDS = [...HIDDEN_SERIES_IDS];
 const DEFAULT_HIDDEN_MOVIES_IDS = [...HIDDEN_MOVIES_IDS];
-const DEFAULT_FEEDBACK_LOGS = JSON.parse(JSON.stringify(FEEDBACK_LOGS));
 
 // Yeni bir hesaba geçmeden/çıkış yapmadan önce bellekteki state'i temiz demo
 // varsayılanlarına döndürür; böylece bir kullanıcının verisi başka bir
@@ -7693,7 +7696,6 @@ function resetUserDataToDefaults() {
     LIKED_MOVIES_IDS = [...DEFAULT_LIKED_MOVIES_IDS];
     HIDDEN_SERIES_IDS = [...DEFAULT_HIDDEN_SERIES_IDS];
     HIDDEN_MOVIES_IDS = [...DEFAULT_HIDDEN_MOVIES_IDS];
-    FEEDBACK_LOGS = JSON.parse(JSON.stringify(DEFAULT_FEEDBACK_LOGS));
 }
 
 function renderFeedbackUI() {
@@ -7783,7 +7785,206 @@ function renderFeedbackUI() {
     }
 
     if (CURRENT_USER) saveUserData(CURRENT_USER);
-    loadErrorReportsInbox();
+}
+
+/* ==========================================================================
+   🛡️ YÖNETİM PANELİ (YALNIZCA SUNUCU ONAYLI ADMİN OTURUMU)
+   ========================================================================== */
+function setAdminSessionFlag(isAdmin) {
+    IS_ADMIN_SESSION = !!isAdmin;
+    if (CURRENT_USER && CURRENT_USER !== 'Kullanıcı') {
+        sessionStorage.setItem(`MATRIX_ADMIN_${CURRENT_USER.toLowerCase()}`, IS_ADMIN_SESSION ? '1' : '0');
+    } else {
+        IS_ADMIN_SESSION = false;
+    }
+    applyAdminNavVisibility();
+}
+
+function applyAdminNavVisibility() {
+    const navBtn = document.getElementById('nav-admin-inbox');
+    const adminTab = document.getElementById('tab-admin-inbox');
+    const show = IS_ADMIN_SESSION && isUserLoggedInStrict();
+
+    if (navBtn) {
+        navBtn.hidden = !show;
+        navBtn.style.display = show ? '' : 'none';
+    }
+
+    if (!show && adminTab && adminTab.classList.contains('active')) {
+        adminTab.classList.remove('active');
+        const exploreTab = document.getElementById('tab-explore');
+        const exploreNav = document.querySelector('.nav-item[data-tab="tab-explore"]');
+        if (exploreTab) exploreTab.classList.add('active');
+        if (exploreNav) exploreNav.classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(n => {
+            if (n !== exploreNav) n.classList.remove('active');
+        });
+    }
+}
+
+async function adminAuthorizedFetch(path, options = {}) {
+    const baseUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? API_BASE_URL : 'http://localhost:4000';
+    const token = await ensureSignedAuthToken();
+    if (!token) return { ok: false, status: 401, data: null };
+    const headers = {
+        ...(options.headers || {}),
+        'Authorization': `Bearer ${token}`
+    };
+    if (options.body && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/json';
+    }
+    try {
+        const res = await fetch(`${baseUrl}${path}`, { ...options, headers });
+        let data = null;
+        try { data = await res.json(); } catch (e) { data = null; }
+        return { ok: res.ok, status: res.status, data };
+    } catch (e) {
+        return { ok: false, status: 0, data: null };
+    }
+}
+
+async function refreshAdminSessionFromServer() {
+    if (!isUserLoggedInStrict()) {
+        IS_ADMIN_SESSION = false;
+        applyAdminNavVisibility();
+        return;
+    }
+    const cached = sessionStorage.getItem(`MATRIX_ADMIN_${CURRENT_USER.toLowerCase()}`);
+    if (cached === '1') IS_ADMIN_SESSION = true;
+
+    const res = await adminAuthorizedFetch('/api/auth/session');
+    if (res.ok && res.data && res.data.ok) {
+        setAdminSessionFlag(!!res.data.isAdmin);
+    } else if (res.status === 403 || res.status === 401) {
+        setAdminSessionFlag(false);
+    } else {
+        applyAdminNavVisibility();
+    }
+}
+
+function parseAdminItemTimestamp(item) {
+    const raw = item.createdAt || item.created_at || item.date || '';
+    const t = Date.parse(String(raw).replace(' ', 'T'));
+    return Number.isFinite(t) ? t : 0;
+}
+
+function renderAdminErrorReportCard(r) {
+    const fieldPills = (r.fields || []).map(fid =>
+        `<span class="error-report-field-pill">${escapeHtml(ERROR_REPORT_FIELD_LABELS[fid] || fid)}</span>`
+    ).join('');
+    const when = r.createdAt || r.created_at || '';
+    const who = r.username ? `@${escapeHtml(r.username)}` : 'Misafir';
+    const typeLabel = r.mediaType === 'MOVIES' ? 'Film' : 'Dizi';
+    const status = r.status || 'open';
+    const statusClass = status === 'resolved' ? 'is-resolved' : (status === 'ignored' ? 'is-ignored' : 'is-open');
+
+    return `
+        <div class="admin-inbox-card ${statusClass}" data-admin-kind="error">
+            <div class="admin-inbox-card-top">
+                <div>
+                    <span class="admin-type-badge admin-type-error"><i class="fa-solid fa-flag"></i> Hata Bildirimi</span>
+                    <div class="admin-inbox-card-title">${escapeHtml(r.itemTitle || r.itemId || 'Bilinmeyen yapım')}</div>
+                    <div class="admin-inbox-card-meta">${typeLabel} · ${who} · ${escapeHtml(String(when).replace('T', ' ').slice(0, 19))}</div>
+                </div>
+                <span class="admin-status-badge ${statusClass}">${escapeHtml(status)}</span>
+            </div>
+            <div class="admin-inbox-card-fields">${fieldPills || '<span class="admin-inbox-empty-note">Alan seçilmedi</span>'}</div>
+            ${r.note ? `<div class="admin-inbox-card-note">📝 ${escapeHtml(r.note)}</div>` : ''}
+            ${r.id && String(r.id).match(/^\d+$/) && status === 'open' ? `
+                <div class="admin-inbox-card-actions">
+                    <button type="button" class="admin-action-btn admin-action-resolve" onclick="updateErrorReportStatus(${r.id}, 'resolved')">✓ Çözüldü</button>
+                    <button type="button" class="admin-action-btn admin-action-ignore" onclick="updateErrorReportStatus(${r.id}, 'ignored')">Yoksay</button>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function renderAdminFeedbackCard(f) {
+    const when = f.createdAt || f.created_at || '';
+    const who = f.username ? `@${escapeHtml(f.username)}` : 'Anonim';
+    const uni = f.mediaType === 'MOVIES' ? 'Film evreni' : 'Dizi evreni';
+    return `
+        <div class="admin-inbox-card admin-feedback-card" data-admin-kind="feedback">
+            <div class="admin-inbox-card-top">
+                <div>
+                    <span class="admin-type-badge admin-type-feedback"><i class="fa-solid fa-comment-dots"></i> Geri Bildirim Mesajı</span>
+                    <div class="admin-inbox-card-title">${who}</div>
+                    <div class="admin-inbox-card-meta">${uni} · ${escapeHtml(String(when).replace('T', ' ').slice(0, 19))}</div>
+                </div>
+            </div>
+            <div class="admin-inbox-card-note admin-feedback-message">${escapeHtml(f.message || '')}</div>
+        </div>
+    `;
+}
+
+async function renderAdminInboxUI(forceRefresh) {
+    if (!IS_ADMIN_SESSION || !isUserLoggedInStrict()) return;
+
+    const unifiedInbox = document.getElementById('admin-unified-inbox');
+    const typeFilterEl = document.getElementById('admin-inbox-type-filter');
+    const filterEl = document.getElementById('admin-error-status-filter');
+    const typeFilter = typeFilterEl ? typeFilterEl.value : 'ALL';
+    const statusFilter = filterEl ? filterEl.value : 'ALL';
+
+    if (unifiedInbox && forceRefresh) {
+        unifiedInbox.innerHTML = `<div class="admin-inbox-loading"><i class="fa-solid fa-spinner fa-spin"></i> Yükleniyor...</div>`;
+    }
+
+    let reports = [];
+    let feedbackItems = [];
+
+    const errRes = await adminAuthorizedFetch('/api/error-reports?limit=100');
+    if (errRes.ok && errRes.data && Array.isArray(errRes.data.reports)) {
+        reports = errRes.data.reports;
+    } else if (!errRes.ok && errRes.status !== 403) {
+        reports = readLocalErrorReports();
+    }
+
+    const fbRes = await adminAuthorizedFetch('/api/feedback?limit=100');
+    if (fbRes.ok && fbRes.data && Array.isArray(fbRes.data.feedback)) {
+        feedbackItems = fbRes.data.feedback;
+    }
+
+    const openCount = reports.filter(r => (r.status || 'open') === 'open').length;
+    const resolvedCount = reports.filter(r => r.status === 'resolved').length;
+    const statOpen = document.getElementById('admin-stat-open');
+    const statResolved = document.getElementById('admin-stat-resolved');
+    const statFeedback = document.getElementById('admin-stat-feedback');
+    if (statOpen) statOpen.textContent = String(openCount);
+    if (statResolved) statResolved.textContent = String(resolvedCount);
+    if (statFeedback) statFeedback.textContent = String(feedbackItems.length);
+
+    let unified = [
+        ...reports.map(r => ({ kind: 'error', sortDate: parseAdminItemTimestamp(r), data: r })),
+        ...feedbackItems.map(f => ({ kind: 'feedback', sortDate: parseAdminItemTimestamp(f), data: f }))
+    ].sort((a, b) => b.sortDate - a.sortDate);
+
+    if (typeFilter === 'error') {
+        unified = unified.filter(item => item.kind === 'error');
+    } else if (typeFilter === 'feedback') {
+        unified = unified.filter(item => item.kind === 'feedback');
+    }
+
+    if (statusFilter && statusFilter !== 'ALL') {
+        unified = unified.filter(item => {
+            if (item.kind !== 'error') return typeFilter === 'feedback';
+            return (item.data.status || 'open') === statusFilter;
+        });
+    }
+
+    if (!unifiedInbox) return;
+
+    if (!unified.length) {
+        unifiedInbox.innerHTML = `<div class="admin-inbox-empty">Bu filtreye uygun geri bildirim yok.</div>`;
+        return;
+    }
+
+    unifiedInbox.innerHTML = unified.map(item =>
+        item.kind === 'error'
+            ? renderAdminErrorReportCard(item.data)
+            : renderAdminFeedbackCard(item.data)
+    ).join('');
 }
 
 // TERCİH KART HTML ŞABLONU (FOTOĞRAFTAKİ BİREBİR MİMARİ - ÖZET VARSAYILAN KAPALI GELİR!)
@@ -7867,10 +8068,7 @@ async function submitFeedback() {
         return;
     }
 
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     const username = CURRENT_USER || 'Anonim';
-
     let savedRemote = false;
     try {
         const baseUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? API_BASE_URL : 'http://localhost:4000';
@@ -7885,23 +8083,13 @@ async function submitFeedback() {
         });
         if (res.ok) savedRemote = true;
     } catch (e) {
-        // offline → local fallback
+        // offline
     }
 
-    FEEDBACK_LOGS.unshift({
-        id: FEEDBACK_LOGS.length + 1,
-        username,
-        message: message,
-        date: dateStr,
-        savedRemote
-    });
-
     input.value = '';
-    if (CURRENT_USER) saveUserData(CURRENT_USER);
     showToast(savedRemote
         ? '✅ Geri bildiriminiz kaydedildi. Teşekkür ederiz!'
-        : '✅ Geri bildirim yerel olarak kaydedildi (sunucu kapalı).', 2200);
-    renderFeedbackUI();
+        : '⚠️ Sunucuya ulaşılamadı; mesajınız kaydedilemedi. Lütfen tekrar deneyin.', 2200);
 }
 
 /* ==========================================================================
@@ -8227,74 +8415,21 @@ async function submitErrorReport() {
 }
 
 async function loadErrorReportsInbox() {
-    const inbox = document.getElementById('error-reports-inbox');
-    if (!inbox) return;
-
-    let reports = [];
-    try {
-        const baseUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? API_BASE_URL : 'http://localhost:4000';
-        const res = await fetch(`${baseUrl}/api/error-reports?limit=40`);
-        if (res.ok) {
-            const data = await res.json();
-            reports = Array.isArray(data.reports) ? data.reports : [];
-        }
-    } catch (e) {
-        // fallback below
-    }
-
-    if (!reports.length) {
-        reports = readLocalErrorReports();
-    }
-
-    if (!reports.length) {
-        inbox.innerHTML = `<div style="font-size: 0.88rem; color: #9ca3af;">Henüz hata bildirimi yok.</div>`;
-        return;
-    }
-
-    inbox.innerHTML = reports.map(r => {
-        const fieldPills = (r.fields || []).map(fid =>
-            `<span class="error-report-field-pill">${escapeHtml(ERROR_REPORT_FIELD_LABELS[fid] || fid)}</span>`
-        ).join('');
-        const when = r.createdAt || r.created_at || '';
-        const who = r.username ? `@${escapeHtml(r.username)}` : 'Misafir';
-        const typeLabel = r.mediaType === 'MOVIES' ? 'Film' : 'Dizi';
-        const status = r.status || 'open';
-        const statusColor = status === 'resolved' ? '#10b981' : (status === 'ignored' ? '#9ca3af' : '#fb923c');
-
-        return `
-            <div class="error-report-inbox-item">
-                <div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                    <div class="er-title">${escapeHtml(r.itemTitle || r.itemId || 'Bilinmeyen yapım')}</div>
-                    <span style="font-size: 0.72rem; font-weight: 800; color: ${statusColor}; text-transform: uppercase;">${escapeHtml(status)}</span>
-                </div>
-                <div class="er-meta">${typeLabel} · ${who} · ${escapeHtml(String(when).replace('T', ' ').slice(0, 19))}</div>
-                <div>${fieldPills}</div>
-                ${r.note ? `<div style="color:#d1d5db; font-size:0.82rem; line-height:1.4;">📝 ${escapeHtml(r.note)}</div>` : ''}
-                ${r.id && String(r.id).match(/^\d+$/) ? `
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;">
-                        <button type="button" class="secondary-gradient-btn" style="padding:5px 10px; font-size:0.72rem;" onclick="updateErrorReportStatus(${r.id}, 'resolved')">Çözüldü</button>
-                        <button type="button" class="secondary-gradient-btn" style="padding:5px 10px; font-size:0.72rem;" onclick="updateErrorReportStatus(${r.id}, 'ignored')">Yoksay</button>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-    }).join('');
+    // Eski public inbox kaldırıldı — yönetim paneli kullanılır
+    if (IS_ADMIN_SESSION) renderAdminInboxUI(true);
 }
 
 async function updateErrorReportStatus(reportId, status) {
-    try {
-        const baseUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? API_BASE_URL : 'http://localhost:4000';
-        const res = await fetch(`${baseUrl}/api/error-reports/${reportId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status })
-        });
-        if (!res.ok) throw new Error('fail');
-        showToast('✅ Rapor durumu güncellendi.', 1600);
-        loadErrorReportsInbox();
-    } catch (e) {
-        showToast('⚠️ Durum güncellenemedi (backend?).', 2000);
+    const res = await adminAuthorizedFetch(`/api/error-reports/${reportId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status })
+    });
+    if (!res.ok) {
+        showToast('⚠️ Durum güncellenemedi.', 2000);
+        return;
     }
+    showToast('✅ Rapor durumu güncellendi.', 1600);
+    renderAdminInboxUI(true);
 }
 
 function undoPreference(itemId, type) {
@@ -8691,6 +8826,7 @@ async function runJointTasteFusion(idsAOverride, idsBOverride, inviteMeta) {
    📌 BAŞLIK: KULLANICI KİMLİK DOĞRULAMA VE OTURUM MOTORU (AUTH & REMEMBER ME)
    ========================================================================== */
 let CURRENT_USER = null;
+let IS_ADMIN_SESSION = false;
 
 let REGISTERED_ACCOUNTS = [
     { username: 'sancopancoo', password: 'password123', email: 'sanco@example.com' },
@@ -8907,6 +9043,7 @@ async function performLogin() {
                 localStorage.setItem(`MATRIX_SIGNED_TOKEN_${acc.username.toLowerCase()}`, data.token);
                 serverSynced = true;
             }
+            setAdminSessionFlag(!!data.isAdmin);
         }
     } catch(e) {}
 
@@ -8925,9 +9062,15 @@ async function performLogin() {
 }
 
 function performLogout() {
+    const prevUser = CURRENT_USER;
     CURRENT_USER = null;
+    IS_ADMIN_SESSION = false;
+    if (prevUser && prevUser !== 'Kullanıcı') {
+        sessionStorage.removeItem(`MATRIX_ADMIN_${prevUser.toLowerCase()}`);
+    }
     localStorage.removeItem('MATRIX_SAVED_USER');
     resetUserDataToDefaults();
+    applyAdminNavVisibility();
     showToast('🚪 Oturum başarıyla kapatıldı.', 2000);
     updateAuthUI();
 }
@@ -8947,8 +9090,7 @@ function saveUserData(username) {
         LIKED_SERIES_IDS: LIKED_SERIES_IDS,
         LIKED_MOVIES_IDS: LIKED_MOVIES_IDS,
         HIDDEN_SERIES_IDS: HIDDEN_SERIES_IDS,
-        HIDDEN_MOVIES_IDS: HIDDEN_MOVIES_IDS,
-        FEEDBACK_LOGS: FEEDBACK_LOGS
+        HIDDEN_MOVIES_IDS: HIDDEN_MOVIES_IDS
     };
 
     localStorage.setItem(`MATRIX_USER_DATA_${username.toLowerCase()}`, JSON.stringify(dataObj));
@@ -8979,7 +9121,6 @@ function loadUserData(username) {
                 if (data.LIKED_MOVIES_IDS) LIKED_MOVIES_IDS = data.LIKED_MOVIES_IDS;
                 if (data.HIDDEN_SERIES_IDS) HIDDEN_SERIES_IDS = data.HIDDEN_SERIES_IDS;
                 if (data.HIDDEN_MOVIES_IDS) HIDDEN_MOVIES_IDS = data.HIDDEN_MOVIES_IDS;
-                if (data.FEEDBACK_LOGS) FEEDBACK_LOGS = data.FEEDBACK_LOGS;
             }
         } catch (e) {
             console.error('Error parsing user data:', e);
@@ -9102,6 +9243,7 @@ function updateAuthUI() {
     renderSocialUI();
     renderFeedbackUI();
     renderAIRecommenderUI();
+    refreshAdminSessionFromServer();
 }
 
 function checkSavedSession() {
@@ -9135,7 +9277,7 @@ function checkSavedSession() {
 
     updateAuthUI();
     if (CURRENT_USER && CURRENT_USER !== 'Kullanıcı') {
-        ensureSignedAuthToken().catch(() => {});
+        ensureSignedAuthToken().then(() => refreshAdminSessionFromServer()).catch(() => {});
     }
 }
 
@@ -9167,6 +9309,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupLibraryListeners();
     setupVersusSearchDropdowns();
     setupAIRecommenderListeners();
+    applyAdminNavVisibility();
     window._libraryNeedsRefresh = true;
     requestAnimationFrame(() => scheduleRenderContentCards(true));
     setTimeout(() => {

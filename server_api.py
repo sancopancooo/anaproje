@@ -54,6 +54,23 @@ OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 SECRET_KEY = os.environ.get('SERVER_SECRET_KEY', 'dizimibul_super_secret_key_2026')
 EMBEDDING_MODEL = 'text-embedding-3-small'
 
+# Yönetici kullanıcı adları — yalnızca sunucu env (frontend'e sızmaz)
+_ADMIN_RAW = os.environ.get('ADMIN_USERNAMES', 'sancopancoo')
+ADMIN_USERNAMES = {u.strip().lower() for u in _ADMIN_RAW.split(',') if u.strip()}
+
+
+def is_admin_user(username):
+    if not username:
+        return False
+    return str(username).strip().lower() in ADMIN_USERNAMES
+
+
+def require_admin_request(req):
+    ok, username = validate_user_token(req)
+    if not ok or not is_admin_user(username):
+        return False, None
+    return True, username
+
 try:
     from db_paths import (
         EMBEDDINGS_DB_PATH as _EMB_PATH,
@@ -1740,9 +1757,27 @@ def api_auth_login():
                 if not auth_utils.kullanici_kontrol_et(username, password):
                     return jsonify({'ok': False, 'error': 'Geçersiz kimlik'}), 401
         token = generate_signed_token(username)
-        return jsonify({'ok': True, 'token': token, 'username': username})
+        return jsonify({
+            'ok': True,
+            'token': token,
+            'username': username,
+            'isAdmin': is_admin_user(username)
+        })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/auth/session', methods=['GET'])
+def api_auth_session():
+    """İmzalı token ile oturum bilgisi (admin bayrağı dahil)."""
+    ok, username = validate_user_token(request)
+    if not ok:
+        return jsonify({'ok': False, 'error': 'Yetkisiz'}), 401
+    return jsonify({
+        'ok': True,
+        'username': username,
+        'isAdmin': is_admin_user(username)
+    })
 
 
 @app.route('/api/auth/user-exists', methods=['GET'])
@@ -3469,7 +3504,10 @@ def create_error_report():
 
 @app.route('/api/error-reports', methods=['GET'])
 def list_error_reports():
-    """Yönetim/debug için; arayüzde gösterilmez."""
+    """Yalnızca yönetici — hata bildirimleri."""
+    admin_ok, _admin = require_admin_request(request)
+    if not admin_ok:
+        return jsonify({'error': 'Yetkisiz'}), 403
     try:
         limit = request.args.get('limit', 50, type=int)
         limit = max(1, min(100, limit or 50))
@@ -3519,6 +3557,9 @@ def list_error_reports():
 
 @app.route('/api/error-reports/<int:report_id>', methods=['PATCH'])
 def update_error_report_status(report_id):
+    admin_ok, _admin = require_admin_request(request)
+    if not admin_ok:
+        return jsonify({'error': 'Yetkisiz'}), 403
     try:
         data = request.get_json(silent=True) or {}
         status = str(data.get('status') or '').strip().lower()
@@ -3559,6 +3600,41 @@ def create_user_feedback():
         return jsonify({'ok': True, 'id': fid})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/feedback', methods=['GET'])
+def list_user_feedback():
+    """Yalnızca yönetici — genel geri bildirim mesajları."""
+    admin_ok, _admin = require_admin_request(request)
+    if not admin_ok:
+        return jsonify({'error': 'Yetkisiz'}), 403
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        limit = max(1, min(100, limit or 50))
+        conn = _user_db_conn()
+        try:
+            if isinstance(conn, sqlite3.Connection):
+                conn.row_factory = sqlite3.Row
+        except Exception:
+            pass
+        c = conn.cursor()
+        rows = c.execute(
+            '''SELECT id, username, message, media_type, status, created_at
+               FROM user_feedback ORDER BY created_at DESC LIMIT ?''',
+            (limit,)
+        ).fetchall()
+        conn.close()
+        feedback = [{
+            'id': r['id'],
+            'username': r['username'],
+            'message': r['message'],
+            'mediaType': r['media_type'],
+            'status': r['status'],
+            'createdAt': r['created_at']
+        } for r in rows]
+        return jsonify({'feedback': feedback, 'count': len(feedback)})
+    except Exception as e:
+        return jsonify({'error': 'Geri bildirimler okunamadı.', 'detail': str(e)}), 500
 
 
 @app.route('/', methods=['GET', 'HEAD'])
