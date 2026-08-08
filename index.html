@@ -780,6 +780,19 @@
 
                     <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 30px 0;" />
 
+                    <!-- İçerik hata bildirimleri (sunucu + yerel yedek) -->
+                    <div class="ai-box" style="padding: 20px; margin-bottom: 24px;">
+                        <h3 style="color: #fff; font-size: 1.05rem; font-weight: 800; margin: 0 0 10px 0; display: flex; align-items: center; gap: 8px;">
+                            <i class="fa-solid fa-flag" style="color: #fb923c;"></i> Kart Hata Bildirimleri
+                        </h3>
+                        <p style="color: #9ca3af; font-size: 0.82rem; margin: 0 0 14px 0; line-height: 1.45;">
+                            Kullanıcıların «Hatayı Bildir» ile gönderdiği kayıtlar burada listelenir. Sunucu açıksa Render/SQLite veritabanına da yazılır (<code style="color:#c084fc;">GET /api/error-reports</code>).
+                        </p>
+                        <div id="error-reports-inbox" style="display: flex; flex-direction: column; gap: 12px;"></div>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 30px 0;" />
+
                     <!-- TERCİH YÖNETİMİ: BEĞENİLENLER VE GİZLENENLER -->
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;" class="preferences-grid">
                         <!-- SOL SÜTUN: BEĞENİLENLER -->
