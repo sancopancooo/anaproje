@@ -102,6 +102,7 @@
                 <button class="nav-item" data-tab="tab-versus"><i class="fa-solid fa-swords"></i> Karşılaştırma</button>
                 <button class="nav-item" data-tab="tab-social"><i class="fa-solid fa-users"></i> Sosyal</button>
                 <button class="nav-item" data-tab="tab-feedback"><i class="fa-solid fa-comment-dots"></i> Geri Bildirim</button>
+                <button class="nav-item nav-item-admin" data-tab="tab-admin-inbox" id="nav-admin-inbox" hidden style="display: none;"><i class="fa-solid fa-inbox"></i> Geri Bildirimleri Görüntüle</button>
             </nav>
 
             <div class="header-right">
@@ -780,19 +781,6 @@
 
                     <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 30px 0;" />
 
-                    <!-- İçerik hata bildirimleri (sunucu + yerel yedek) -->
-                    <div class="ai-box" style="padding: 20px; margin-bottom: 24px;">
-                        <h3 style="color: #fff; font-size: 1.05rem; font-weight: 800; margin: 0 0 10px 0; display: flex; align-items: center; gap: 8px;">
-                            <i class="fa-solid fa-flag" style="color: #fb923c;"></i> Kart Hata Bildirimleri
-                        </h3>
-                        <p style="color: #9ca3af; font-size: 0.82rem; margin: 0 0 14px 0; line-height: 1.45;">
-                            Kullanıcıların «Hatayı Bildir» ile gönderdiği kayıtlar burada listelenir. Sunucu açıksa Render/SQLite veritabanına da yazılır (<code style="color:#c084fc;">GET /api/error-reports</code>).
-                        </p>
-                        <div id="error-reports-inbox" style="display: flex; flex-direction: column; gap: 12px;"></div>
-                    </div>
-
-                    <hr style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 30px 0;" />
-
                     <!-- TERCİH YÖNETİMİ: BEĞENİLENLER VE GİZLENENLER -->
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;" class="preferences-grid">
                         <!-- SOL SÜTUN: BEĞENİLENLER -->
@@ -825,6 +813,52 @@
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <!-- SEKME 8: GERİ BİLDİRİMLERİ GÖRÜNTÜLE (YALNIZCA ADMİN — NAV'DA GİZLİ) -->
+                <div id="tab-admin-inbox" class="tab-content">
+                    <div class="admin-inbox-header">
+                        <div class="admin-inbox-header-text">
+                            <h2 class="admin-inbox-title"><i class="fa-solid fa-inbox"></i> Geri Bildirimleri Görüntüle</h2>
+                            <p class="admin-inbox-subtitle">Hata bildirimleri ve geri bildirim mesajları — tek listede, en yeniden eskiye</p>
+                        </div>
+                        <button type="button" class="admin-refresh-btn" onclick="renderAdminInboxUI(true)">
+                            <i class="fa-solid fa-rotate"></i> Yenile
+                        </button>
+                    </div>
+
+                    <div class="admin-stats-row" id="admin-stats-row">
+                        <div class="admin-stat-card admin-stat-open">
+                            <span class="admin-stat-label">Açık hata</span>
+                            <strong class="admin-stat-value" id="admin-stat-open">—</strong>
+                        </div>
+                        <div class="admin-stat-card admin-stat-resolved">
+                            <span class="admin-stat-label">Çözülen hata</span>
+                            <strong class="admin-stat-value" id="admin-stat-resolved">—</strong>
+                        </div>
+                        <div class="admin-stat-card admin-stat-feedback">
+                            <span class="admin-stat-label">Geri bildirim mesajı</span>
+                            <strong class="admin-stat-value" id="admin-stat-feedback">—</strong>
+                        </div>
+                    </div>
+
+                    <div class="admin-panel-toolbar">
+                        <label class="admin-filter-label">Tür</label>
+                        <select id="admin-inbox-type-filter" class="custom-select admin-filter-select" onchange="renderAdminInboxUI(true)">
+                            <option value="ALL" selected>Tümü</option>
+                            <option value="error">Hata bildirimleri</option>
+                            <option value="feedback">Geri bildirim mesajları</option>
+                        </select>
+                        <label class="admin-filter-label">Hata durumu</label>
+                        <select id="admin-error-status-filter" class="custom-select admin-filter-select" onchange="renderAdminInboxUI(true)">
+                            <option value="ALL">Tümü</option>
+                            <option value="open" selected>Açık</option>
+                            <option value="resolved">Çözüldü</option>
+                            <option value="ignored">Yoksayıldı</option>
+                        </select>
+                    </div>
+
+                    <div id="admin-unified-inbox" class="admin-inbox-list"></div>
                 </div>
 
             </section>
