@@ -66,6 +66,8 @@ const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+/** true olursa afişler Render proxy üzerinden gider (TMDB engelli ağlar). */
+let preferTmdbProxy = false;
 
 function getApiBaseUrl() {
     return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL) ? String(API_BASE_URL).replace(/\/$/, '') : '';
@@ -99,27 +101,32 @@ function toDirectTmdbUrl(url, size) {
         .replace(/\/t\/p\/original\//, `/t/p/${size}/`);
 }
 
-/** TMDB görselleri: önce Render proxy (TR engelleri), yoksa doğrudan CDN. */
-function optimizeTmdbPosterUrl(url) {
-    const direct = toDirectTmdbUrl(url, 'w342');
-    if (!direct || !direct.includes('image.tmdb.org')) return direct || url;
+function toProxiedTmdbUrl(url, size) {
+    const direct = toDirectTmdbUrl(url, size);
+    if (!direct || !direct.includes('image.tmdb.org')) return '';
     const path = extractTmdbImagePath(direct);
     const apiBase = getApiBaseUrl();
-    if (apiBase && path) {
-        return `${apiBase}/api/tmdb-image?size=w342&path=${encodeURIComponent(path)}`;
+    if (!apiBase || !path) return '';
+    return `${apiBase}/api/tmdb-image?size=${size}&path=${encodeURIComponent(path)}`;
+}
+
+/** Varsayılan: doğrudan TMDB CDN (hızlı). Engelse proxy'ye düşer. */
+function optimizeTmdbPosterUrl(url) {
+    const direct = toDirectTmdbUrl(url, 'w342');
+    if (!direct) return url;
+    if (preferTmdbProxy) {
+        return toProxiedTmdbUrl(direct, 'w342') || direct;
     }
-    return direct;
+    return direct.includes('image.tmdb.org') ? direct : (direct || url);
 }
 
 function optimizeTmdbBackdropUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w780');
-    if (!direct || !direct.includes('image.tmdb.org')) return direct || url;
-    const path = extractTmdbImagePath(direct);
-    const apiBase = getApiBaseUrl();
-    if (apiBase && path) {
-        return `${apiBase}/api/tmdb-image?size=w780&path=${encodeURIComponent(path)}`;
+    if (!direct) return url;
+    if (preferTmdbProxy) {
+        return toProxiedTmdbUrl(direct, 'w780') || direct;
     }
-    return direct;
+    return direct.includes('image.tmdb.org') ? direct : (direct || url);
 }
 
 function resolvePosterUrl(item) {
@@ -135,22 +142,60 @@ function safeImageSrc(url) {
 
 window.__posterImgError = function (img) {
     if (!img) return;
-    const direct = img.getAttribute('data-direct') || '';
+    const proxy = img.getAttribute('data-proxy') || '';
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
-    if (direct && !img.dataset.triedDirect && img.src !== direct) {
-        img.dataset.triedDirect = '1';
-        img.src = direct;
+    if (proxy && !img.dataset.triedProxy) {
+        img.dataset.triedProxy = '1';
+        preferTmdbProxy = true;
+        img.src = proxy;
         return;
     }
     img.onerror = null;
     if (img.src !== fallback) img.src = fallback;
 };
 
-function posterImgHtml(url, alt, className = 'card-poster-img', lazy = true) {
-    const primary = url || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(primary, 'w342') || primary;
-    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'decoding="async"';
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+/** Keşfet kartlarında lazy KAPALI — sayfadaki afişler paralel ve hemen yüklenir. */
+function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
+    const resolved = url || TMDB_POSTER_FALLBACK;
+    const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
+    const proxy = toProxiedTmdbUrl(direct, 'w342');
+    const primary = preferTmdbProxy && proxy ? proxy : (direct.includes('image.tmdb.org') ? direct : resolved);
+    const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
+    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+}
+
+/** TMDB erişimini erken ölç; engelliysa proxy'ye geç ve Render'ı ısıt. */
+function warmImagePipeline() {
+    const probe = new Image();
+    probe.referrerPolicy = 'no-referrer';
+    let settled = false;
+    const finish = (useProxy) => {
+        if (settled) return;
+        settled = true;
+        preferTmdbProxy = !!useProxy;
+        if (useProxy) {
+            const proxyWarm = toProxiedTmdbUrl(
+                'https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg',
+                'w92'
+            );
+            if (proxyWarm) {
+                const warm = new Image();
+                warm.referrerPolicy = 'no-referrer';
+                warm.src = proxyWarm;
+            }
+        }
+    };
+    const timer = setTimeout(() => finish(true), 1200);
+    probe.onload = () => {
+        clearTimeout(timer);
+        finish(false);
+    };
+    probe.onerror = () => {
+        clearTimeout(timer);
+        finish(true);
+    };
+    probe.src = `https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg?_=${Date.now()}`;
 }
 
 function brandLogoSvgMarkup(universe) {
@@ -2311,7 +2356,7 @@ function renderContentCards() {
     const showCardBackdrops = paginatedItems.length <= 12;
     const fragment = document.createDocumentFragment();
 
-    paginatedItems.forEach(item => {
+    paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
@@ -2324,7 +2369,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title)}
+                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false, cardIdx < 6 ? 'high' : 'auto')}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -9437,6 +9482,7 @@ let ORIGINAL_LIBRARY_TAB_HTML = '';
    🚀 UYGULAMA BAŞLATMA
    ========================================================================== */
 document.addEventListener('DOMContentLoaded', () => {
+    warmImagePipeline();
     loadRegisteredAccounts();
     const sTab = document.getElementById('tab-social');
     const fTab = document.getElementById('tab-feedback');
