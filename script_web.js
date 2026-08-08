@@ -54,7 +54,7 @@ function safeImageSrc(url) {
 
 function renderCardBackdropHtml(backdropUrl, mode = 'overlay') {
     if (!backdropUrl) return '';
-    const safeUrl = safeImageSrc(String(backdropUrl));
+    const safeUrl = safeImageSrc(optimizeTmdbBackdropUrl(backdropUrl));
     const variant = (mode === 'hero') ? 'card-backdrop-banner--hero' : 'card-backdrop-banner--overlay';
     return `
         <div class="card-backdrop-banner ${variant}" aria-hidden="true">
@@ -71,7 +71,8 @@ const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
 let _renderCardsToken = 0;
-let _posterProxyWarmed = false;
+/** true olursa afişler Render proxy üzerinden gider (yalnızca TMDB engelli ağlar). */
+let preferTmdbProxy = false;
 
 function getApiBaseUrl() {
     return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
@@ -79,38 +80,130 @@ function getApiBaseUrl() {
         : '';
 }
 
-function extractTmdbPath(url) {
+function extractTmdbImagePath(url) {
     const m = String(url || '').match(/\/t\/p\/[^/]+(\/[^?\s#]+)/);
     return m ? m[1] : '';
 }
 
-/** Afişler Render proxy üzerinden (TMDB TR'de yavaş/engel); liste için w185. */
+function toDirectTmdbUrl(url, size) {
+    let raw = String(url || '').trim();
+    if (!raw) return '';
+    if (raw.includes('wsrv.nl')) {
+        try {
+            const nested = new URL(raw).searchParams.get('url');
+            if (nested) raw = nested;
+        } catch (_) { /* ignore */ }
+    }
+    if (raw.includes('/api/tmdb-image')) {
+        try {
+            const u = new URL(raw, 'https://local.invalid');
+            const path = u.searchParams.get('path') || '';
+            const sz = u.searchParams.get('size') || size;
+            if (path) return `https://image.tmdb.org/t/p/${sz}${path.startsWith('/') ? path : '/' + path}`;
+        } catch (_) { /* ignore */ }
+    }
+    if (!raw.includes('image.tmdb.org')) return raw;
+    return raw
+        .replace(/\/t\/p\/w\d+\//, `/t/p/${size}/`)
+        .replace(/\/t\/p\/original\//, `/t/p/${size}/`);
+}
+
+function toProxiedTmdbUrl(url, size) {
+    const direct = toDirectTmdbUrl(url, size);
+    if (!direct || !direct.includes('image.tmdb.org')) return '';
+    const path = extractTmdbImagePath(direct);
+    const apiBase = getApiBaseUrl();
+    if (!apiBase || !path) return '';
+    return `${apiBase}/api/tmdb-image?size=${size}&path=${encodeURIComponent(path)}`;
+}
+
+/** Varsayılan: doğrudan TMDB CDN (hızlı). Engelse proxy'ye düşer. */
+function optimizeTmdbPosterUrl(url) {
+    const direct = toDirectTmdbUrl(url, 'w342');
+    if (!direct) return url;
+    if (preferTmdbProxy) {
+        return toProxiedTmdbUrl(direct, 'w342') || direct;
+    }
+    return direct.includes('image.tmdb.org') ? direct : (direct || url);
+}
+
+function optimizeTmdbBackdropUrl(url) {
+    const direct = toDirectTmdbUrl(url, 'w780');
+    if (!direct) return url;
+    if (preferTmdbProxy) {
+        return toProxiedTmdbUrl(direct, 'w780') || direct;
+    }
+    return direct.includes('image.tmdb.org') ? direct : (direct || url);
+}
+
 function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = String(item.poster_url || item.afis_url || '').trim();
     if (!raw) return TMDB_POSTER_FALLBACK;
-    const path = extractTmdbPath(raw);
-    const api = getApiBaseUrl();
-    if (api && path) {
-        return `${api}/api/tmdb-image?size=w185&path=${encodeURIComponent(path)}`;
+    return optimizeTmdbPosterUrl(raw);
+}
+
+window.__posterImgError = function (img) {
+    if (!img) return;
+    const proxy = img.getAttribute('data-proxy') || '';
+    const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
+    if (proxy && !img.dataset.triedProxy) {
+        img.dataset.triedProxy = '1';
+        preferTmdbProxy = true;
+        img.src = proxy;
+        return;
     }
-    return raw;
+    img.onerror = null;
+    if (img.src !== fallback) img.src = fallback;
+};
+
+/** Keşfet kartlarında lazy KAPALI — sayfadaki afişler paralel ve hemen yüklenir. */
+function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
+    const resolved = url || TMDB_POSTER_FALLBACK;
+    const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
+    const proxy = toProxiedTmdbUrl(direct, 'w342');
+    const primary = preferTmdbProxy && proxy ? proxy : (direct.includes('image.tmdb.org') ? direct : resolved);
+    const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
+    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
-function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false) {
-    const src = safeImageSrc(url || TMDB_POSTER_FALLBACK);
-    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'loading="eager" decoding="async"';
-    return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" onError="this.onerror=null; this.src='${TMDB_POSTER_FALLBACK}';" />`;
-}
-
-function warmPosterProxy() {
-    if (_posterProxyWarmed) return;
-    const api = getApiBaseUrl();
-    if (!api) return;
-    _posterProxyWarmed = true;
-    const img = new Image();
-    img.referrerPolicy = 'no-referrer';
-    img.src = `${api}/api/tmdb-image?size=w92&path=${encodeURIComponent('/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg')}`;
+/**
+ * TMDB erişimini hap seçilince ölç (landing'i dondurmaz).
+ * Engelliysa proxy'ye geç; değilse doğrudan CDN kullan.
+ */
+function warmImagePipeline() {
+    if (warmImagePipeline._started) return;
+    warmImagePipeline._started = true;
+    const probe = new Image();
+    probe.referrerPolicy = 'no-referrer';
+    let settled = false;
+    const finish = (useProxy) => {
+        if (settled) return;
+        settled = true;
+        preferTmdbProxy = !!useProxy;
+        if (useProxy) {
+            const proxyWarm = toProxiedTmdbUrl(
+                'https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg',
+                'w92'
+            );
+            if (proxyWarm) {
+                const warm = new Image();
+                warm.referrerPolicy = 'no-referrer';
+                warm.src = proxyWarm;
+            }
+        }
+    };
+    const timer = setTimeout(() => finish(true), 1500);
+    probe.onload = () => {
+        clearTimeout(timer);
+        finish(false);
+    };
+    probe.onerror = () => {
+        clearTimeout(timer);
+        finish(true);
+    };
+    probe.src = `https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg?_=${Date.now()}`;
 }
 
 /** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
@@ -654,7 +747,7 @@ let isTransitioning = false;
 window.enterAppFromGlobal = function(universe) {
     if (isTransitioning) return;
     isTransitioning = true;
-    warmPosterProxy();
+    warmImagePipeline();
 
     console.log("Entering universe:", universe);
     const landingPage = document.getElementById('landing-page');
@@ -2319,12 +2412,12 @@ function renderContentCards() {
 
     cardsContainer.innerHTML = '';
 
-    // 4. Kartların DOM'a Eklenmesi — kapaklar eager + proxy ile paralel yüklenir
+    // 4. Kartların DOM'a Eklenmesi — afişler doğrudan TMDB CDN'den (proxy yedek)
     const showCardBackdrops = false;
     const fragment = document.createDocumentFragment();
     const isMoviesView = universeSnapshot === 'MOVIES';
 
-    paginatedItems.forEach(item => {
+    paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
@@ -2337,7 +2430,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false)}
+                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false, cardIdx < 6 ? 'high' : 'auto')}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -6149,14 +6242,19 @@ function openItemDetailModal(itemId) {
     const extraGridElem = document.getElementById('detail-modal-extra-grid');
     const actionsElem = document.getElementById('detail-modal-actions');
 
-    const backdropUrl = item.backdrop_url || item.poster_url || 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1280';
+    const backdropUrl = optimizeTmdbBackdropUrl(item.backdrop_url || item.poster_url || 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1280');
     if (backdropElem) {
         backdropElem.referrerPolicy = 'no-referrer';
         backdropElem.src = backdropUrl;
     }
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
-        posterElem.src = resolvePosterUrl(item);
+        posterElem.onerror = function () { window.__posterImgError(this); };
+        const directPoster = resolvePosterUrl(item);
+        const proxyPoster = toProxiedTmdbUrl(directPoster, 'w342');
+        if (proxyPoster) posterElem.setAttribute('data-proxy', proxyPoster);
+        posterElem.setAttribute('data-fallback', TMDB_POSTER_FALLBACK);
+        posterElem.src = directPoster;
     }
     if (titleElem) titleElem.textContent = item.title;
 
