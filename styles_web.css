@@ -466,6 +466,8 @@ body {
 .media-horizontal-card {
     position: relative;
     overflow: hidden;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 380px;
     background: var(--bg-card);
     border: 1px solid var(--border-card);
     border-left: 4px solid #f97316;

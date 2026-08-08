@@ -50,11 +50,11 @@ function escapeHtml(str) {
  */
 function renderCardBackdropHtml(backdropUrl, mode = 'overlay') {
     if (!backdropUrl) return '';
-    const safeUrl = String(backdropUrl).replace(/"/g, '&quot;');
+    const safeUrl = safeImageSrc(optimizeTmdbBackdropUrl(backdropUrl));
     const variant = (mode === 'hero') ? 'card-backdrop-banner--hero' : 'card-backdrop-banner--overlay';
     return `
         <div class="card-backdrop-banner ${variant}" aria-hidden="true">
-            <img class="card-backdrop-banner__img" src="${safeUrl}" alt="" loading="lazy" decoding="async" onError="this.closest('.card-backdrop-banner') && this.closest('.card-backdrop-banner').remove();" />
+            <img class="card-backdrop-banner__img" src="${safeUrl}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onError="this.closest('.card-backdrop-banner') && this.closest('.card-backdrop-banner').remove();" />
             <div class="card-backdrop-banner__fade"></div>
         </div>
     `;
@@ -64,6 +64,35 @@ function renderCardBackdropHtml(backdropUrl, mode = 'overlay') {
 const PLACEHOLDER_DUB = "TÜRKÇE_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
+
+const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+
+function optimizeTmdbPosterUrl(url) {
+    if (!url || !String(url).includes('image.tmdb.org')) return url;
+    return String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w342/').replace(/\/t\/p\/original\//, '/t/p/w342/');
+}
+
+function optimizeTmdbBackdropUrl(url) {
+    if (!url || !String(url).includes('image.tmdb.org')) return url;
+    return String(url).replace(/\/t\/p\/w\d+\//, '/t/p/w780/').replace(/\/t\/p\/original\//, '/t/p/w780/');
+}
+
+function resolvePosterUrl(item) {
+    if (!item) return TMDB_POSTER_FALLBACK;
+    const raw = item.poster_url || item.afis_url || '';
+    if (!String(raw).trim()) return TMDB_POSTER_FALLBACK;
+    return optimizeTmdbPosterUrl(String(raw).trim());
+}
+
+function safeImageSrc(url) {
+    return String(url || '').replace(/"/g, '&quot;');
+}
+
+function posterImgHtml(url, alt, className = 'card-poster-img', lazy = true) {
+    const src = safeImageSrc(url || TMDB_POSTER_FALLBACK);
+    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : '';
+    return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" onError="this.onerror=null; this.src='${TMDB_POSTER_FALLBACK}';" />`;
+}
 
 function isValidTrailerUrl(url) {
     if (!url) return false;
@@ -1878,7 +1907,7 @@ function passesExploreSidebarFilters(item, opts) {
 }
 
 let _renderCardsDebounceTimer = null;
-const RENDER_CARDS_DEBOUNCE_MS = 250;
+const RENDER_CARDS_DEBOUNCE_MS = 400;
 
 function scheduleRenderContentCards(immediate = false) {
     if (_renderCardsDebounceTimer) {
@@ -2180,20 +2209,24 @@ function renderContentCards() {
         return;
     }
 
-    // 4. Kartların DOM'a Eklenmesi
+    // 4. Kartların DOM'a Eklenmesi (çok kartta backdrop kapalı — performans)
+    const showCardBackdrops = paginatedItems.length <= 12;
+    const fragment = document.createDocumentFragment();
+
     paginatedItems.forEach(item => {
         const card = document.createElement('div');
         card.className = 'media-horizontal-card';
 
         const whyWatchList = (item.why_watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
+        const posterSrc = resolvePosterUrl(item);
 
         card.innerHTML = `
-            ${renderCardBackdropHtml(item.backdrop_url)}
+            ${showCardBackdrops ? renderCardBackdropHtml(item.backdrop_url) : ''}
 
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    <img class="card-poster-img" src="${item.poster_url}" alt="${item.title}" loading="lazy" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                    ${posterImgHtml(posterSrc, item.title)}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -2260,8 +2293,9 @@ function renderContentCards() {
             </div>
         `;
 
-        cardsContainer.appendChild(card);
+        fragment.appendChild(card);
     });
+    cardsContainer.appendChild(fragment);
 }
 
 
@@ -3297,6 +3331,7 @@ function renderLibraryCards() {
             item.trailer_dub_url = found.trailer_dub_url || '';
             item.trailer_sub_url = found.trailer_sub_url || '';
             item.backdrop_url = found.backdrop_url || item.backdrop_url || '';
+            if (!item.poster_url) item.poster_url = found.poster_url || found.afis_url || '';
             if (!item.slogan) item.slogan = found.slogan || '';
         }
 
@@ -3308,7 +3343,7 @@ function renderLibraryCards() {
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <!-- SOL AFİŞ -->
                 <div class="card-left-poster">
-                    <img class="card-poster-img" src="${item.poster_url}" alt="${item.title}" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                    ${posterImgHtml(resolvePosterUrl(item), item.title)}
                 </div>
 
                 <!-- ORTA BÖLÜM: DETAYLAR VE SEZON/BÖLÜM (+) İKONU -->
@@ -3914,6 +3949,7 @@ function renderFavorites() {
         const found = dataset.find(d => d.id === item.id);
         if (found) {
             item.backdrop_url = found.backdrop_url || item.backdrop_url || '';
+            if (!item.poster_url) item.poster_url = found.poster_url || found.afis_url || '';
             if (!item.slogan) item.slogan = found.slogan || '';
             item.trailer_url = found.trailer_url || '';
             item.trailer_dub_url = found.trailer_dub_url || '';
@@ -3932,7 +3968,7 @@ function renderFavorites() {
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <!-- SOL AFİŞ -->
                 <div class="card-left-poster">
-                    <img class="card-poster-img" src="${item.poster_url}" alt="${item.title}" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                    ${posterImgHtml(resolvePosterUrl(item), item.title)}
                 </div>
 
                 <!-- SAĞ DETAYLAR VE BİREBİR AKORDEON PANELLERİ -->
@@ -4987,7 +5023,7 @@ function buildAICardHTML(itemData, score, reason, isMovie) {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="padding-top: ${backdropUrl ? '0px' : '16px'}; margin-top: ${backdropUrl ? '-36px' : '0px'}; position: relative; z-index: 2;">
                 <div class="card-left-poster" style="position: relative;">
-                    <img class="card-poster-img" src="${poster}" alt="${escapeHtml(title)}" loading="lazy" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                    ${posterImgHtml(poster, title)}
                     <div style="position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.85); border: 1px solid #facc15; border-radius: 12px; padding: 2px 8px; font-weight: 800; font-size: 0.75rem; color: #facc15; backdrop-filter: blur(4px);">
                         ⚡ %${score} Yapay Zeka Uyum
                     </div>
@@ -5769,7 +5805,7 @@ function generateAIRecommendations() {
             <div class="media-horizontal-card" style="margin-bottom: 20px;">
                 <div class="card-top-row">
                     <div class="card-left-poster">
-                        <img class="card-poster-img" src="${candidate.poster_url}" alt="${candidate.title}" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                        ${posterImgHtml(resolvePosterUrl(candidate), candidate.title)}
                     </div>
 
                     <div class="card-right-details">
@@ -6002,9 +6038,15 @@ function openItemDetailModal(itemId) {
     const extraGridElem = document.getElementById('detail-modal-extra-grid');
     const actionsElem = document.getElementById('detail-modal-actions');
 
-    const backdropUrl = item.backdrop_url || item.poster_url || 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1280';
-    if (backdropElem) backdropElem.src = backdropUrl;
-    if (posterElem) posterElem.src = item.poster_url;
+    const backdropUrl = optimizeTmdbBackdropUrl(item.backdrop_url || item.poster_url || 'https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?w=1280');
+    if (backdropElem) {
+        backdropElem.referrerPolicy = 'no-referrer';
+        backdropElem.src = backdropUrl;
+    }
+    if (posterElem) {
+        posterElem.referrerPolicy = 'no-referrer';
+        posterElem.src = resolvePosterUrl(item);
+    }
     if (titleElem) titleElem.textContent = item.title;
 
     if (sloganElem) {
@@ -8005,7 +8047,7 @@ function renderPreferenceCardHtml(item, prefType, isMovie) {
 
             <!-- SOL AFİŞ -->
             <div class="card-left-poster" style="width: 110px; height: 165px; flex-shrink: 0; position: relative; z-index: 2;">
-                <img class="card-poster-img" src="${item.poster_url}" alt="${item.title}" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                ${posterImgHtml(resolvePosterUrl(item), item.title, 'card-poster-img', false)}
             </div>
 
             <!-- SAĞ DETAYLAR VE BİREBİR AKORDEON PANELLERİ -->
