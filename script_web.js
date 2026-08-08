@@ -48,8 +48,13 @@ function escapeHtml(str) {
  * mode: 'overlay' = Keşfet/Kitaplık/Favoriler (kart üstüne bindirme)
  *       'hero'    = AI Tavsiyeler (kartın üstünde ayrı şerit)
  */
+/** HTML attribute içine güvenli yazım — & kaçmazsa data-proxy/data-mirror URL'leri kırılır. */
 function safeImageSrc(url) {
-    return String(url || '').replace(/"/g, '&quot;');
+    return String(url || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
 
 function renderCardBackdropHtml(backdropUrl, mode = 'overlay') {
@@ -115,17 +120,25 @@ function toProxiedTmdbUrl(url, size) {
     return `${apiBase}/api/tmdb-image?size=${size}&path=${encodeURIComponent(path)}`;
 }
 
-/** Her zaman doğrudan TMDB CDN. Proxy sadece tek görsel onError zincirinde. */
+function toWeservTmdbUrl(url, size) {
+    const direct = toDirectTmdbUrl(url, size);
+    if (!direct || !direct.includes('image.tmdb.org')) return '';
+    const width = (size === 'w780') ? 780 : (size === 'w185' ? 185 : 342);
+    // TMDB TR'de sık engelli; weserv CDN (Render cold-start yok)
+    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}&output=webp`;
+}
+
+/** Liste/kart afişleri: weserv öncelikli (TR engeline dayanıklı). */
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
-    return direct.includes('image.tmdb.org') ? direct : (direct || url);
+    return toWeservTmdbUrl(direct, 'w342') || (direct.includes('image.tmdb.org') ? direct : (direct || url));
 }
 
 function optimizeTmdbBackdropUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w780');
     if (!direct) return url;
-    return direct.includes('image.tmdb.org') ? direct : (direct || url);
+    return toWeservTmdbUrl(direct, 'w780') || (direct.includes('image.tmdb.org') ? direct : (direct || url));
 }
 
 function resolvePosterUrl(item) {
@@ -135,43 +148,31 @@ function resolvePosterUrl(item) {
     return optimizeTmdbPosterUrl(raw);
 }
 
-function toWeservTmdbUrl(url, size) {
-    const direct = toDirectTmdbUrl(url, size);
-    if (!direct || !direct.includes('image.tmdb.org')) return '';
-    // CDN yedek: TMDB engelli ağlarda Render'dan genelde daha hızlı
-    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${size === 'w780' ? 780 : 342}&output=webp`;
-}
-
 window.__posterImgError = function (img) {
     if (!img) return;
-    const proxy = img.getAttribute('data-proxy') || '';
-    const mirror = img.getAttribute('data-mirror') || '';
+    const direct = img.getAttribute('data-direct') || '';
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
-    // Tek görsel için zincir; global preferTmdbProxy'yi kirletme (tüm listeyi yavaşlatır)
-    if (mirror && !img.dataset.triedMirror) {
-        img.dataset.triedMirror = '1';
-        img.src = mirror;
-        return;
-    }
-    if (proxy && !img.dataset.triedProxy) {
-        img.dataset.triedProxy = '1';
-        img.src = proxy;
+    // Birincil weserv fail → direkt TMDB dene → placeholder
+    if (direct && !img.dataset.triedDirect) {
+        img.dataset.triedDirect = '1';
+        img.src = direct;
         return;
     }
     img.onerror = null;
     if (img.src !== fallback) img.src = fallback;
 };
 
-/** Keşfet kartlarında lazy KAPALI — sayfadaki afişler paralel ve hemen yüklenir. */
+/**
+ * Kart afişleri: weserv → TMDB → placeholder.
+ * Render /api/tmdb-image kullanılmaz (cold-start yavaşlığı).
+ */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
     const resolved = url || TMDB_POSTER_FALLBACK;
     const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
-    const mirror = toWeservTmdbUrl(direct, 'w342');
-    const proxy = toProxiedTmdbUrl(direct, 'w342');
-    const primary = direct.includes('image.tmdb.org') ? direct : resolved;
+    const primary = toWeservTmdbUrl(direct, 'w342') || (direct.includes('image.tmdb.org') ? direct : resolved);
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
