@@ -47,7 +47,29 @@ export const THEME_LEXICON = {
     gateComboB: ['salgın', 'apocalypse', 'kıyamet', 'hayatta kalma', 'survival', 'outbreak', 'walkers'],
     titleHints: [
       'the walking dead', 'fear the walking dead', 'the last of us', 'last of us',
-      'z nation', 'all of us are dead', 'train to busan', 'world war z', 'sweet home'
+      'z nation', 'all of us are dead', 'train to busan', 'world war z', 'sweet home',
+      'kingdom' // yalnızca Kore zombi dizisi "Kingdom" — "The Last Kingdom" aşağıda elenir
+    ],
+    titleExclude: ['last kingdom', 'the last kingdom']
+  },
+  okul: {
+    triggers: ['okul', 'okulda', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'universite', 'campus'],
+    expand: [
+      'okul', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'universite', 'campus',
+      'öğrenci', 'ogrenci', 'sınıf', 'sinif', 'akademi', 'yurt', 'teen drama', 'gençlik'
+    ],
+    gateStrong: [
+      'okul', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'universite', 'campus',
+      'high school', 'boarding school', 'öğrenci', 'ogrenci'
+    ],
+    gateComboA: ['okul', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'campus'],
+    gateComboB: [
+      'öğrenci', 'ogrenci', 'sınıf', 'sinif', 'hoca', 'öğretmen', 'ogretmen',
+      'teen', 'genç', 'genc', 'akademi', 'yurt', 'mezun', 'sınıf arkadaş'
+    ],
+    titleHints: [
+      'elite', 'riverdale', 'pretty little liars', 'gossip girl', 'sex education',
+      'skam', 'control z', 'american vandal', 'dear white people', 'wednesday'
     ]
   },
   vampir: {
@@ -233,6 +255,11 @@ export function passesHardGate(metaText, titleText, themes) {
   const title = (titleText || '').toLowerCase();
 
   return themes.every(th => {
+    // Tema-özel başlık dışlamaları (örn. zombi "Kingdom" ≠ The Last Kingdom)
+    if (Array.isArray(th.titleExclude) && th.titleExclude.some(ex => textHasToken(title, ex))) {
+      return false;
+    }
+
     // Bilinen tema dizisi/filmi başlıkta → direkt geç
     const titleHintHit = (th.titleHints || []).some(h => titleHintMatches(title, h));
     if (titleHintHit) return true;
@@ -295,6 +322,42 @@ export function tokenizeQuery(queryText) {
     .split(/[^\wığüşöçİĞÜŞÖÇ0-9]+/)
     .map(w => w.trim())
     .filter(w => w.length >= 2 && !stop.has(w) && !stop.has(normalizeTr(w)));
+}
+
+/** Arama cümlesinde açıkça istenen türler (dram, gizem vb.) */
+const QUERY_GENRE_ALIASES = {
+  dram: ['dram', 'drama'],
+  gizem: ['gizem', 'mystery'],
+  komedi: ['komedi', 'comedy'],
+  korku: ['korku', 'horror'],
+  gerilim: ['gerilim', 'thriller'],
+  aksiyon: ['aksiyon', 'action'],
+  animasyon: ['animasyon', 'animation'],
+  belgesel: ['belgesel', 'documentary'],
+  romantik: ['romantik', 'romance'],
+  suc: ['suç', 'suc', 'crime'],
+  fantastik: ['fantastik', 'fantasy'],
+  bilimkurgu: ['bilim kurgu', 'bilimkurgu', 'sci-fi', 'scifi']
+};
+
+export function extractRequiredGenres(queryText) {
+  const q = String(queryText || '').toLowerCase();
+  const qNorm = normalizeTr(q);
+  const required = [];
+  for (const [genreKey, aliases] of Object.entries(QUERY_GENRE_ALIASES)) {
+    const hit = aliases.some(alias => {
+      const a = alias.toLowerCase();
+      return q.includes(a) || qNorm.includes(normalizeTr(a));
+    });
+    if (hit) required.push(genreKey);
+  }
+  return required;
+}
+
+export function itemMatchesRequiredGenres(metaText, requiredGenres) {
+  if (!requiredGenres || requiredGenres.length === 0) return true;
+  const body = normalizeTr(String(metaText || '').toLowerCase());
+  return requiredGenres.every(g => body.includes(g));
 }
 
 export const HYBRID_VECTOR_WEIGHT = 0.55;
