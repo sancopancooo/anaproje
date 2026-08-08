@@ -125,7 +125,7 @@ function toDirectTmdbUrl(url, size) {
 
 function toProxiedTmdbUrl(url, size) {
     const direct = toDirectTmdbUrl(url, size);
-    if (!direct || !direct.includes('image.tmdb.org')) return '';
+    if (!direct || !isTmdbImageHost(direct)) return '';
     const path = extractTmdbImagePath(direct);
     const apiBase = getApiBaseUrl();
     if (!apiBase || !path) return '';
@@ -141,21 +141,20 @@ function toWeservTmdbUrl(url, size) {
     const direct = toDirectTmdbUrl(url, size);
     if (!direct || !isTmdbImageHost(direct)) return '';
     const width = (size === 'w780') ? 780 : (size === 'w185' ? 185 : 342);
-    // TMDB TR'de sık engelli; weserv CDN (Render cold-start yok)
     return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}&output=webp`;
 }
 
-/** Liste/kart afişleri: weserv öncelikli (TR engeline dayanıklı). */
+/** Varsayılan: direkt TMDB. Yedekler onError zincirinde. */
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
-    return toWeservTmdbUrl(direct, 'w342') || (isTmdbImageHost(direct) ? direct : (direct || url));
+    return isTmdbImageHost(direct) ? direct : (direct || url);
 }
 
 function optimizeTmdbBackdropUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w780');
     if (!direct) return url;
-    return toWeservTmdbUrl(direct, 'w780') || (isTmdbImageHost(direct) ? direct : (direct || url));
+    return isTmdbImageHost(direct) ? direct : (direct || url);
 }
 
 function resolvePosterUrl(item) {
@@ -167,12 +166,17 @@ function resolvePosterUrl(item) {
 
 window.__posterImgError = function (img) {
     if (!img) return;
-    const direct = img.getAttribute('data-direct') || '';
+    const mirror = img.getAttribute('data-mirror') || '';
+    const proxy = img.getAttribute('data-proxy') || '';
     const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
-    // Birincil weserv fail → direkt TMDB dene → placeholder
-    if (direct && !img.dataset.triedDirect) {
-        img.dataset.triedDirect = '1';
-        img.src = direct;
+    if (mirror && !img.dataset.triedMirror) {
+        img.dataset.triedMirror = '1';
+        img.src = mirror;
+        return;
+    }
+    if (proxy && !img.dataset.triedProxy) {
+        img.dataset.triedProxy = '1';
+        img.src = proxy;
         return;
     }
     img.onerror = null;
@@ -180,18 +184,18 @@ window.__posterImgError = function (img) {
 };
 
 /**
- * Kart afişleri: weserv → TMDB → placeholder.
- * Ham TMDB veya önceden weserv'lenmiş URL kabul eder (çift sarmalama yok).
+ * Kart afişleri: TMDB → weserv → Render proxy → placeholder.
+ * Çift sarmalama yok; & attribute kaçışı safeImageSrc ile.
  */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
     const resolved = url || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(resolved, 'w342');
-    const primary = (direct && toWeservTmdbUrl(direct, 'w342'))
-        || (direct && isTmdbImageHost(direct) ? direct : '')
-        || resolved;
+    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
+    const primary = (direct && isTmdbImageHost(direct)) ? direct : resolved;
+    const mirror = direct ? toWeservTmdbUrl(direct, 'w342') : '';
+    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct || '')}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -207,7 +211,7 @@ function bindLandingHeroReady() {
     hero.addEventListener('error', markReady, { once: true });
 }
 
-/** Giriş / evren değişiminde: önce boş ekran, kapaklar hazır olunca boya. */
+/** Giriş / evren değişiminde: yükleme ekranı, kapaklar hazır olunca boya. */
 let _exploreReadyGate = false;
 
 function preloadImages(urls, timeoutMs = 3000) {
@@ -242,13 +246,30 @@ function ensureExploreBootMask() {
     if (mask) return mask;
     mask = document.createElement('div');
     mask.id = 'explore-boot-mask';
-    mask.setAttribute('aria-hidden', 'true');
+    mask.setAttribute('role', 'status');
+    mask.setAttribute('aria-live', 'polite');
+    mask.innerHTML = `
+        <div class="explore-boot-mask__card">
+            <div class="explore-boot-mask__spinner" aria-hidden="true"></div>
+            <div class="explore-boot-mask__title">Dizi / film kartları yükleniyor</div>
+            <div class="explore-boot-mask__sub">Kapaklar hazırlanıyor, hemen açılacak…</div>
+        </div>`;
     document.body.appendChild(mask);
     return mask;
 }
 
-function showExploreBootMask() {
+function showExploreBootMask(isMovies) {
     const mask = ensureExploreBootMask();
+    const title = mask.querySelector('.explore-boot-mask__title');
+    const sub = mask.querySelector('.explore-boot-mask__sub');
+    if (title) {
+        title.textContent = (isMovies === true)
+            ? 'Film kartları yükleniyor'
+            : (isMovies === false)
+                ? 'Dizi kartları yükleniyor'
+                : 'Dizi / film kartları yükleniyor';
+    }
+    if (sub) sub.textContent = 'Kapaklar hazırlanıyor, hemen açılacak…';
     mask.classList.add('is-visible');
 }
 
@@ -257,11 +278,12 @@ function hideExploreBootMask() {
     if (mask) mask.classList.remove('is-visible');
 }
 
-async function waitExploreReadyBlank(urls) {
+async function waitExploreReadyBlank(urls, isMovies) {
     const minMs = 2000;
     const maxMs = 3000;
     const started = Date.now();
-    showExploreBootMask();
+    showExploreBootMask(isMovies);
+    // Aynı birincil URL'leri ısıt (paint ile birebir aynı — cache isabeti)
     await preloadImages(urls, maxMs);
     const left = minMs - (Date.now() - started);
     if (left > 0) await new Promise((r) => setTimeout(r, left));
@@ -280,7 +302,7 @@ function resetExploreCardsForUniverseSwitch() {
     const resultsCountText = document.getElementById('results-count-text');
     if (cardsContainer) cardsContainer.innerHTML = '';
     if (resultsCountText) resultsCountText.textContent = '';
-    showExploreBootMask();
+    showExploreBootMask(currentUniverse === 'MOVIES');
 }
 
 function isMainAppVisible() {
@@ -867,9 +889,9 @@ window.enterAppFromGlobal = function(universe) {
         }
 
         stopMatrixCanvas();
-        // Boş maske + kapak preload; hazır olunca kartlar toptan gelir
+        // Yükleme ekranı + kapak preload; hazır olunca kartlar toptan gelir
         _exploreReadyGate = true;
-        showExploreBootMask();
+        showExploreBootMask(universe === 'MOVIES');
         try {
             scheduleRenderContentCards(true);
             window._libraryNeedsRefresh = true;
@@ -2565,13 +2587,21 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
-        hideExploreBootMask();
+        // DOM'daki afişler decode olana kadar maskeyi tut (placeholder flaşı olmasın)
+        const imgs = [...cardsContainer.querySelectorAll('.card-poster-img')];
+        Promise.all(imgs.map((img) => {
+            if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+            return img.decode().catch(() => new Promise((res) => {
+                img.addEventListener('load', res, { once: true });
+                img.addEventListener('error', res, { once: true });
+            }));
+        })).finally(() => hideExploreBootMask());
     };
 
     if (useReadyGate) {
         cardsContainer.innerHTML = '';
         const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
-        waitExploreReadyBlank(posterUrls).then(paintCards);
+        waitExploreReadyBlank(posterUrls, isMoviesView).then(paintCards);
         return;
     }
 

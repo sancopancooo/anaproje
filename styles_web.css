@@ -102,12 +102,15 @@ body {
     to { transform: rotate(360deg); }
 }
 
-/* Giriş / evren değişimi: kapaklar hazır olana kadar tamamen boş ekran */
+/* Giriş / evren değişimi: kartlar yüklenirken bilgi ekranı */
 #explore-boot-mask {
     position: fixed;
     inset: 0;
     z-index: 2000;
-    background: #07070d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(7, 7, 13, 0.92);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s ease;
@@ -115,6 +118,39 @@ body {
 #explore-boot-mask.is-visible {
     opacity: 1;
     pointer-events: all;
+}
+.explore-boot-mask__card {
+    text-align: center;
+    padding: 28px 32px;
+    max-width: 360px;
+}
+.explore-boot-mask__spinner {
+    width: 52px;
+    height: 52px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    border: 3px solid rgba(251, 146, 60, 0.2);
+    border-top-color: #fb923c;
+    border-right-color: #a855f7;
+    animation: spin 0.75s linear infinite;
+}
+body.theme-blue .explore-boot-mask__spinner {
+    border-color: rgba(56, 189, 248, 0.2);
+    border-top-color: #38bdf8;
+    border-right-color: #818cf8;
+}
+.explore-boot-mask__title {
+    color: #fff;
+    font-weight: 800;
+    font-size: 1.15rem;
+    letter-spacing: 0.2px;
+    margin-bottom: 8px;
+}
+.explore-boot-mask__sub {
+    color: #9ca3af;
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.45;
 }
 
 .center-divider-line {
