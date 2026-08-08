@@ -81,6 +81,7 @@ const POSTER_EMPTY_SVG = "data:image/svg+xml," + encodeURIComponent(
 );
 let _renderCardsToken = 0;
 let _posterRetryTimers = [];
+const _posterHandlerBound = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
 if (typeof window._posterOkByPath === 'undefined') window._posterOkByPath = {};
 if (typeof window._exploreViewCache === 'undefined') {
     window._exploreViewCache = {
@@ -201,17 +202,47 @@ function optimizeTmdbBackdropUrl(url) {
 
 function buildPosterSrcChain(rawUrl) {
     const raw = String(rawUrl || '').trim();
-    if (!raw) return { primary: POSTER_EMPTY_SVG, mirror: '', proxy: '', pathKey: '' };
+    if (!raw) return { primary: POSTER_EMPTY_SVG, mirror: '', proxy: '', pathKey: '', raw: '' };
     const direct = toDirectTmdbUrl(raw, 'w342') || (isTmdbImageHost(raw) ? raw : '');
+    const tmdb = (direct && isTmdbImageHost(direct)) ? direct : '';
     const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
     const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
-    const tmdb = (direct && isTmdbImageHost(direct)) ? direct : '';
     const pathKey = posterPathKey(raw);
     const cachedOk = (pathKey && window._posterOkByPath[pathKey]) ? window._posterOkByPath[pathKey] : '';
-    // Önce daha önce yüklenmiş URL, sonra weserv/tmdb (hızlı), en son backend proxy
-    const primary = cachedOk || weserv || tmdb || proxy || raw;
-    const alts = [weserv, tmdb, proxy, raw].filter((u) => u && u !== primary);
-    return { primary, mirror: alts[0] || '', proxy: alts[1] || '', pathKey };
+    // Önce önbellek/TMDB (GitHub Pages'te en güvenilir), sonra weserv, en son backend proxy
+    const primary = cachedOk || tmdb || weserv || proxy || raw;
+    const alts = [tmdb, weserv, proxy, raw].filter((u) => u && u !== primary);
+    return { primary, mirror: alts[0] || '', proxy: alts[1] || '', pathKey, raw };
+}
+
+function bindPosterImgHandlers(img) {
+    if (!img) return;
+    if (_posterHandlerBound && _posterHandlerBound.has(img)) return;
+    if (_posterHandlerBound) _posterHandlerBound.add(img);
+    else img.dataset.posterBound = '1';
+    img.addEventListener('load', function onPosterLoad() { window.__posterImgLoad(this); });
+    img.addEventListener('error', function onPosterError() { window.__posterImgError(this); });
+}
+
+function rehydrateCardPosters(root, forceReload = false) {
+    const scope = root || document.getElementById('cards-container');
+    if (!scope) return;
+    scope.querySelectorAll('.card-poster-img, img[data-poster-key]').forEach((img) => {
+        const raw = img.getAttribute('data-raw-poster') || '';
+        bindPosterImgHandlers(img);
+        if (!raw) return;
+        if (!forceReload && img.complete && img.naturalWidth > 0 && !img.classList.contains('poster-missing')) return;
+        const chain = buildPosterSrcChain(raw);
+        img.classList.remove('poster-missing');
+        delete img.dataset.triedMirror;
+        delete img.dataset.triedProxy;
+        delete img.dataset.retryCount;
+        img.setAttribute('data-primary', chain.primary || '');
+        img.setAttribute('data-mirror', chain.mirror || '');
+        img.setAttribute('data-proxy', chain.proxy || '');
+        img.setAttribute('data-poster-key', chain.pathKey || '');
+        img.src = chain.primary || POSTER_EMPTY_SVG;
+    });
 }
 
 function resolvePosterUrl(item) {
@@ -265,19 +296,19 @@ window.__posterImgError = function (img) {
     if (img.src !== POSTER_EMPTY_SVG) img.src = POSTER_EMPTY_SVG;
 };
 
-/** Kart afişleri: önbellek → weserv → TMDB → proxy */
+/** Kart afişleri: önbellek → TMDB → weserv → proxy */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
-    const { primary, mirror, proxy, pathKey } = buildPosterSrcChain(url);
+    const { primary, mirror, proxy, pathKey, raw } = buildPosterSrcChain(url);
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" onload="window.__posterImgLoad(this)" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-raw-poster="${safeImageSrc(raw || url || '')}" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" />`;
 }
 
 /** Küçük afiş önizlemeleri (manuel arama, karşılaştırma vb.) */
 function posterThumbHtml(rawUrl, style) {
-    const { primary, mirror, proxy, pathKey } = buildPosterSrcChain(rawUrl);
+    const { primary, mirror, proxy, pathKey, raw } = buildPosterSrcChain(rawUrl);
     const css = style || 'width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);';
-    return `<img src="${safeImageSrc(primary)}" style="${css}" referrerpolicy="no-referrer" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" onload="window.__posterImgLoad(this)" onError="window.__posterImgError(this)" />`;
+    return `<img src="${safeImageSrc(primary)}" style="${css}" referrerpolicy="no-referrer" data-raw-poster="${safeImageSrc(raw || rawUrl || '')}" data-primary="${safeImageSrc(primary)}" data-poster-key="${safeImageSrc(pathKey)}" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -2502,6 +2533,7 @@ function renderContentCards() {
     const cachedView = window._exploreViewCache[universeSnapshot];
     if (cachedView && cachedView.key === viewCacheKey && cachedView.html) {
         cardsContainer.innerHTML = cachedView.html;
+        rehydrateCardPosters(cardsContainer, true);
         if (resultsCountText && cachedView.countText) resultsCountText.textContent = cachedView.countText;
         renderExplorePagination(cachedView.totalPages || totalPages);
         return;
@@ -2598,6 +2630,7 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
+        rehydrateCardPosters(cardsContainer);
         window._exploreViewCache[universeSnapshot] = {
             key: viewCacheKey,
             html: cardsContainer.innerHTML,
@@ -6410,16 +6443,17 @@ function openItemDetailModal(itemId) {
     }
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
-        posterElem.onerror = function () { window.__posterImgError(this); };
-        posterElem.onload = function () { window.__posterImgLoad(this); };
         delete posterElem.dataset.triedMirror;
         delete posterElem.dataset.triedProxy;
         delete posterElem.dataset.retryCount;
-        const chain = buildPosterSrcChain(item.poster_url || item.afis_url);
+        const rawPoster = item.poster_url || item.afis_url || '';
+        const chain = buildPosterSrcChain(rawPoster);
+        posterElem.setAttribute('data-raw-poster', rawPoster);
         posterElem.setAttribute('data-primary', chain.primary);
         posterElem.setAttribute('data-poster-key', chain.pathKey);
         posterElem.setAttribute('data-mirror', chain.mirror);
         posterElem.setAttribute('data-proxy', chain.proxy);
+        bindPosterImgHandlers(posterElem);
         posterElem.src = chain.primary || POSTER_EMPTY_SVG;
     }
     if (titleElem) titleElem.textContent = item.title;
