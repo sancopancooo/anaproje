@@ -91,12 +91,19 @@ function extractTmdbImagePath(url) {
 function toDirectTmdbUrl(url, size) {
     let raw = String(url || '').trim();
     if (!raw) return '';
-    if (raw.includes('wsrv.nl')) {
+
+    // weserv / wsrv katmanlarını soy (çift sarmalama URL'yi bozuyordu)
+    for (let i = 0; i < 4; i++) {
+        if (!/weserv\.nl|wsrv\.nl/i.test(raw)) break;
         try {
             const nested = new URL(raw).searchParams.get('url');
-            if (nested) raw = nested;
-        } catch (_) { /* ignore */ }
+            if (!nested) break;
+            raw = /^https?:\/\//i.test(nested) ? nested : `https://${nested}`;
+        } catch (_) {
+            break;
+        }
     }
+
     if (raw.includes('/api/tmdb-image')) {
         try {
             const u = new URL(raw, 'https://local.invalid');
@@ -105,7 +112,12 @@ function toDirectTmdbUrl(url, size) {
             if (path) return `https://image.tmdb.org/t/p/${sz}${path.startsWith('/') ? path : '/' + path}`;
         } catch (_) { /* ignore */ }
     }
-    if (!raw.includes('image.tmdb.org')) return raw;
+
+    // Host kontrolü — query string içinde geçen image.tmdb.org'a kanma
+    let host = '';
+    try { host = new URL(raw).hostname; } catch (_) { /* ignore */ }
+    if (host !== 'image.tmdb.org') return raw;
+
     return raw
         .replace(/\/t\/p\/w\d+\//, `/t/p/${size}/`)
         .replace(/\/t\/p\/original\//, `/t/p/${size}/`);
@@ -120,9 +132,14 @@ function toProxiedTmdbUrl(url, size) {
     return `${apiBase}/api/tmdb-image?size=${size}&path=${encodeURIComponent(path)}`;
 }
 
+function isTmdbImageHost(url) {
+    try { return new URL(String(url || '')).hostname === 'image.tmdb.org'; }
+    catch (_) { return false; }
+}
+
 function toWeservTmdbUrl(url, size) {
     const direct = toDirectTmdbUrl(url, size);
-    if (!direct || !direct.includes('image.tmdb.org')) return '';
+    if (!direct || !isTmdbImageHost(direct)) return '';
     const width = (size === 'w780') ? 780 : (size === 'w185' ? 185 : 342);
     // TMDB TR'de sık engelli; weserv CDN (Render cold-start yok)
     return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}&output=webp`;
@@ -132,13 +149,13 @@ function toWeservTmdbUrl(url, size) {
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
-    return toWeservTmdbUrl(direct, 'w342') || (direct.includes('image.tmdb.org') ? direct : (direct || url));
+    return toWeservTmdbUrl(direct, 'w342') || (isTmdbImageHost(direct) ? direct : (direct || url));
 }
 
 function optimizeTmdbBackdropUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w780');
     if (!direct) return url;
-    return toWeservTmdbUrl(direct, 'w780') || (direct.includes('image.tmdb.org') ? direct : (direct || url));
+    return toWeservTmdbUrl(direct, 'w780') || (isTmdbImageHost(direct) ? direct : (direct || url));
 }
 
 function resolvePosterUrl(item) {
@@ -164,15 +181,17 @@ window.__posterImgError = function (img) {
 
 /**
  * Kart afişleri: weserv → TMDB → placeholder.
- * Render /api/tmdb-image kullanılmaz (cold-start yavaşlığı).
+ * Ham TMDB veya önceden weserv'lenmiş URL kabul eder (çift sarmalama yok).
  */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
     const resolved = url || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
-    const primary = toWeservTmdbUrl(direct, 'w342') || (direct.includes('image.tmdb.org') ? direct : resolved);
+    const direct = toDirectTmdbUrl(resolved, 'w342');
+    const primary = (direct && toWeservTmdbUrl(direct, 'w342'))
+        || (direct && isTmdbImageHost(direct) ? direct : '')
+        || resolved;
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-direct="${safeImageSrc(direct || '')}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -791,17 +810,23 @@ window.enterAppFromGlobal = function(universe) {
         }
 
         stopMatrixCanvas();
-        try {
-            scheduleRenderContentCards(true);
-            window._libraryNeedsRefresh = true;
-            window._favoritesNeedsRefresh = true;
-            if (typeof updateVersusUI === 'function') updateVersusUI();
-            if (typeof renderSocialUI === 'function') renderSocialUI();
-            if (typeof renderFeedbackUI === 'function') renderFeedbackUI();
-        } catch (err) {
-            console.warn("Render error:", err);
-        }
-        isTransitioning = false;
+        // Kartları portal-entry (opacity:0 + blur) bitmeden boyama —
+        // ilk girişte afişler error'a düşüp sarı placeholder'a kilitleniyordu.
+        // Evren değiştirince animasyon olmadığı için resimler düzgün geliyordu.
+        const paintExplore = () => {
+            try {
+                scheduleRenderContentCards(true);
+                window._libraryNeedsRefresh = true;
+                window._favoritesNeedsRefresh = true;
+                if (typeof updateVersusUI === 'function') updateVersusUI();
+                if (typeof renderSocialUI === 'function') renderSocialUI();
+                if (typeof renderFeedbackUI === 'function') renderFeedbackUI();
+            } catch (err) {
+                console.warn("Render error:", err);
+            }
+            isTransitioning = false;
+        };
+        setTimeout(paintExplore, 820);
     }, 600);
 };
 
