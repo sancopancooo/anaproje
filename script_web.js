@@ -75,6 +75,10 @@ const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+/** Çakma afiş yerine koyu kutu — Unsplash popcorn devreye girmesin */
+const POSTER_EMPTY_SVG = "data:image/svg+xml," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513" viewBox="0 0 342 513"><rect fill="#120f1a" width="342" height="513"/></svg>'
+);
 let _renderCardsToken = 0;
 
 function getApiBaseUrl() {
@@ -156,42 +160,70 @@ function optimizeTmdbBackdropUrl(url) {
     return isTmdbImageHost(direct) ? direct : (direct || url);
 }
 
+function buildPosterSrcChain(rawUrl) {
+    const raw = String(rawUrl || '').trim();
+    if (!raw) return [];
+    const direct = toDirectTmdbUrl(raw, 'w342') || (isTmdbImageHost(raw) ? raw : '');
+    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
+    const weserv = direct ? toWeservTmdbUrl(direct, 'w342') : '';
+    const tmdb = (direct && isTmdbImageHost(direct)) ? direct : '';
+    // Kendi backend proxy en güvenilir; ardından weserv, en son direkt TMDB
+    return [...new Set([proxy, weserv, tmdb, raw].filter(Boolean))];
+}
+
 function resolvePosterUrl(item) {
-    if (!item) return TMDB_POSTER_FALLBACK;
+    if (!item) return POSTER_EMPTY_SVG;
     const raw = String(item.poster_url || item.afis_url || '').trim();
-    if (!raw) return TMDB_POSTER_FALLBACK;
-    return optimizeTmdbPosterUrl(raw);
+    if (!raw) return POSTER_EMPTY_SVG;
+    const chain = buildPosterSrcChain(raw);
+    return chain[0] || optimizeTmdbPosterUrl(raw);
 }
 
 window.__posterImgError = function (img) {
     if (!img) return;
-    const mirror = img.getAttribute('data-mirror') || '';
-    const proxy = img.getAttribute('data-proxy') || '';
-    const fallback = img.getAttribute('data-fallback') || TMDB_POSTER_FALLBACK;
-    if (mirror && !img.dataset.triedMirror) {
-        img.dataset.triedMirror = '1';
-        img.src = mirror;
+    let candidates = [];
+    try { candidates = JSON.parse(img.getAttribute('data-candidates') || '[]'); } catch (_) { /* ignore */ }
+    const idx = parseInt(img.dataset.candidateIdx || '0', 10);
+
+    if (candidates.length && idx + 1 < candidates.length) {
+        img.dataset.candidateIdx = String(idx + 1);
+        img.src = candidates[idx + 1];
         return;
     }
-    if (proxy && !img.dataset.triedProxy) {
-        img.dataset.triedProxy = '1';
-        img.src = proxy;
+
+    const retries = parseInt(img.dataset.retryCount || '0', 10);
+    if (candidates.length && retries < 3) {
+        img.dataset.retryCount = String(retries + 1);
+        img.dataset.candidateIdx = '0';
+        const bust = candidates[0] + (candidates[0].includes('?') ? '&' : '?') + '_r=' + Date.now();
+        setTimeout(() => { img.src = bust; }, 400 * (retries + 1));
         return;
     }
+
+    // Tüm kaynaklar tükendi — çakma Unsplash yerine koyu kutu bırak
     img.onerror = null;
-    if (img.src !== fallback) img.src = fallback;
+    img.classList.add('poster-missing');
+    if (img.src !== POSTER_EMPTY_SVG) img.src = POSTER_EMPTY_SVG;
 };
 
-/** Kart afişleri: direkt TMDB → weserv → backend proxy → placeholder */
+/** Kart afişleri: backend proxy → weserv → direkt TMDB (çakma placeholder yok) */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
-    const resolved = url || TMDB_POSTER_FALLBACK;
-    const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
-    const primary = (direct && isTmdbImageHost(direct)) ? direct : resolved;
-    const mirror = direct ? toWeservTmdbUrl(direct, 'w342') : '';
-    const proxy = direct ? toProxiedTmdbUrl(direct, 'w342') : '';
+    const raw = String(url || '').trim();
+    const candidates = buildPosterSrcChain(raw);
+    const primary = candidates[0] || POSTER_EMPTY_SVG;
+    const candidatesAttr = safeImageSrc(JSON.stringify(candidates));
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
-    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
+    return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-candidate-idx="0" onError="window.__posterImgError(this)" />`;
+}
+
+/** Küçük afiş önizlemeleri (manuel arama, karşılaştırma vb.) */
+function posterThumbHtml(rawUrl, style) {
+    const candidates = buildPosterSrcChain(rawUrl);
+    const primary = candidates[0] || POSTER_EMPTY_SVG;
+    const candidatesAttr = safeImageSrc(JSON.stringify(candidates));
+    const css = style || 'width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);';
+    return `<img src="${safeImageSrc(primary)}" style="${css}" referrerpolicy="no-referrer" data-candidates="${candidatesAttr}" data-candidate-idx="0" onError="window.__posterImgError(this)" />`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -2422,7 +2454,7 @@ function renderContentCards() {
         card.className = 'media-horizontal-card';
 
         const whyWatchList = (item.why_watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
-        const posterSrc = resolvePosterUrl(item);
+        const rawPoster = item.poster_url || item.afis_url || '';
 
         card.innerHTML = `
             ${showCardBackdrops ? renderCardBackdropHtml(item.backdrop_url) : ''}
@@ -2430,7 +2462,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false, cardIdx < 6 ? 'high' : 'auto')}
+                    ${posterImgHtml(rawPoster, item.title, 'card-poster-img', false, cardIdx < 6 ? 'high' : 'auto')}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
@@ -4347,7 +4379,7 @@ function handleManualSearchInput(inputEl) {
             return `
                 <div class="manual-dropdown-item" onclick="selectManualDropdownItem('${item.id}', '${escapeQuotes(item.title)}', ${inLib})" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(22, 18, 42, 0.98); transition: background 0.2s ease;">
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <img src="${resolvePosterUrl(item)}" style="width: 34px; height: 46px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.5);" onError="this.onerror=null; this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';" />
+                        ${posterThumbHtml(item.poster_url || item.afis_url)}
                         <div>
                             <div style="font-weight: 800; color: #fff; font-size: 0.9rem;">${item.title}</div>
                             <div style="font-size: 0.75rem; color: #9ca3af;">${item.year || ''} · ${Array.isArray(item.genres) ? item.genres.slice(0, 2).join(', ') : (item.genres || '')}</div>
@@ -6302,15 +6334,14 @@ function openItemDetailModal(itemId) {
     if (posterElem) {
         posterElem.referrerPolicy = 'no-referrer';
         posterElem.onerror = function () { window.__posterImgError(this); };
-        delete posterElem.dataset.triedMirror;
-        delete posterElem.dataset.triedProxy;
-        const rawPoster = String(item.poster_url || item.afis_url || '').trim();
-        const directPoster = toDirectTmdbUrl(rawPoster, 'w342') || rawPoster;
-        posterElem.setAttribute('data-mirror', toWeservTmdbUrl(directPoster, 'w342') || '');
-        posterElem.setAttribute('data-proxy', toProxiedTmdbUrl(directPoster, 'w342') || '');
-        posterElem.setAttribute('data-fallback', TMDB_POSTER_FALLBACK);
-        posterElem.removeAttribute('data-direct');
-        posterElem.src = resolvePosterUrl(item);
+        delete posterElem.dataset.candidateIdx;
+        delete posterElem.dataset.retryCount;
+        const candidates = buildPosterSrcChain(item.poster_url || item.afis_url);
+        posterElem.setAttribute('data-candidates', JSON.stringify(candidates));
+        posterElem.removeAttribute('data-mirror');
+        posterElem.removeAttribute('data-proxy');
+        posterElem.removeAttribute('data-fallback');
+        posterElem.src = candidates[0] || POSTER_EMPTY_SVG;
     }
     if (titleElem) titleElem.textContent = item.title;
 
@@ -6771,7 +6802,7 @@ function runVersusComparison() {
         <div style="display:grid; grid-template-columns:1fr 60px 1fr; gap:10px; align-items:start;">
             <!-- Item 1 -->
             <div style="background:rgba(167,139,250,0.08); border:2px solid rgba(167,139,250,0.3); border-radius:16px; padding:16px; text-align:center;">
-                <img src="${resolvePosterUrl(item1)}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
+                ${posterThumbHtml(item1.poster_url || item1.afis_url, 'width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;')}
                 <div style="font-weight:800; color:#fff; font-size:1rem;">${item1.title}</div>
                 <div style="font-size:0.78rem; color:#a78bfa; margin-top:4px;">${g1.slice(0,2).join(' · ') || ''}</div>
             </div>
@@ -6781,7 +6812,7 @@ function runVersusComparison() {
             </div>
             <!-- Item 2 -->
             <div style="background:rgba(249,115,22,0.08); border:2px solid rgba(249,115,22,0.3); border-radius:16px; padding:16px; text-align:center;">
-                <img src="${resolvePosterUrl(item2)}" style="width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;" onerror="this.src='https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500'">
+                ${posterThumbHtml(item2.poster_url || item2.afis_url, 'width:100%; max-width:180px; height:250px; object-fit:cover; border-radius:10px; box-shadow:0 8px 25px rgba(0,0,0,0.5); margin-bottom:12px;')}
                 <div style="font-weight:800; color:#fff; font-size:1rem;">${item2.title}</div>
                 <div style="font-size:0.78rem; color:#f97316; margin-top:4px;">${g2.slice(0,2).join(' · ') || ''}</div>
             </div>
