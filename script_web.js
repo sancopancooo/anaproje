@@ -71,8 +71,6 @@ const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
 let _renderCardsToken = 0;
-/** true olursa afişler Render proxy üzerinden gider (yalnızca TMDB engelli ağlar). */
-let preferTmdbProxy = false;
 
 function getApiBaseUrl() {
     return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
@@ -117,22 +115,16 @@ function toProxiedTmdbUrl(url, size) {
     return `${apiBase}/api/tmdb-image?size=${size}&path=${encodeURIComponent(path)}`;
 }
 
-/** Varsayılan: doğrudan TMDB CDN (hızlı). Engelse proxy'ye düşer. */
+/** Her zaman doğrudan TMDB CDN. Proxy sadece tek görsel onError zincirinde. */
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
-    if (preferTmdbProxy) {
-        return toProxiedTmdbUrl(direct, 'w342') || direct;
-    }
     return direct.includes('image.tmdb.org') ? direct : (direct || url);
 }
 
 function optimizeTmdbBackdropUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w780');
     if (!direct) return url;
-    if (preferTmdbProxy) {
-        return toProxiedTmdbUrl(direct, 'w780') || direct;
-    }
     return direct.includes('image.tmdb.org') ? direct : (direct || url);
 }
 
@@ -176,9 +168,7 @@ function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fe
     const direct = toDirectTmdbUrl(resolved, 'w342') || resolved;
     const mirror = toWeservTmdbUrl(direct, 'w342');
     const proxy = toProxiedTmdbUrl(direct, 'w342');
-    const primary = preferTmdbProxy
-        ? (proxy || mirror || direct)
-        : (direct.includes('image.tmdb.org') ? direct : resolved);
+    const primary = direct.includes('image.tmdb.org') ? direct : resolved;
     const prioAttr = (!lazy && fetchPriority) ? ` fetchpriority="${fetchPriority}"` : '';
     const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : `loading="eager" decoding="async"${prioAttr}`;
     return `<img class="${className}" src="${safeImageSrc(primary)}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" data-mirror="${safeImageSrc(mirror)}" data-proxy="${safeImageSrc(proxy)}" data-fallback="${TMDB_POSTER_FALLBACK}" onError="window.__posterImgError(this)" />`;
@@ -218,45 +208,6 @@ function exploreLoadingHtml(message) {
             <div style="width:46px;height:46px;border:3px solid rgba(168,85,247,0.25);border-top-color:#facc15;border-radius:50%;animation:spin 0.75s linear infinite;margin:0 auto 14px;"></div>
             ${escapeHtml(message || 'Kapaklar hazırlanıyor…')}
         </div>`;
-}
-
-/**
- * TMDB erişimini hap seçilince ölç (landing'i dondurmaz).
- * Sadece gerçek hata (onerror) olursa proxy'ye geç — yavaşlıkta proxy'ye zorlama.
- */
-function warmImagePipeline() {
-    if (warmImagePipeline._started) return;
-    warmImagePipeline._started = true;
-    const probe = new Image();
-    probe.referrerPolicy = 'no-referrer';
-    let settled = false;
-    const finish = (useProxy) => {
-        if (settled) return;
-        settled = true;
-        preferTmdbProxy = !!useProxy;
-        if (useProxy) {
-            const proxyWarm = toProxiedTmdbUrl(
-                'https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg',
-                'w92'
-            );
-            if (proxyWarm) {
-                const warm = new Image();
-                warm.referrerPolicy = 'no-referrer';
-                warm.src = proxyWarm;
-            }
-        }
-    };
-    // Timeout'ta proxy'ye düşME — yavaş ama çalışan TMDB'yi bozma
-    const timer = setTimeout(() => finish(false), 4000);
-    probe.onload = () => {
-        clearTimeout(timer);
-        finish(false);
-    };
-    probe.onerror = () => {
-        clearTimeout(timer);
-        finish(true);
-    };
-    probe.src = `https://image.tmdb.org/t/p/w92/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg?_=${Date.now()}`;
 }
 
 /** Landing hero yarım yarım boyanmasın — tam yüklenince göster. */
@@ -813,8 +764,6 @@ let isTransitioning = false;
 window.enterAppFromGlobal = function(universe) {
     if (isTransitioning) return;
     isTransitioning = true;
-    warmImagePipeline();
-
     console.log("Entering universe:", universe);
     const landingPage = document.getElementById('landing-page');
     const mainApp = document.getElementById('main-app');
