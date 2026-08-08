@@ -70,17 +70,74 @@ const PLACEHOLDER_SUB = "ORİJİNAL_FRAGMAN_BULUNAMADI";
 const PLACEHOLDER_GENERIC = "not_found";
 
 const TMDB_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1598899134739-24c46f58b8c0?w=500';
+let _renderCardsToken = 0;
+let _posterProxyWarmed = false;
 
+function getApiBaseUrl() {
+    return (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
+        ? String(API_BASE_URL).replace(/\/$/, '')
+        : '';
+}
+
+function extractTmdbPath(url) {
+    const m = String(url || '').match(/\/t\/p\/[^/]+(\/[^?\s#]+)/);
+    return m ? m[1] : '';
+}
+
+/** Afişler Render proxy üzerinden (TMDB TR'de yavaş/engel); liste için w185. */
 function resolvePosterUrl(item) {
     if (!item) return TMDB_POSTER_FALLBACK;
     const raw = String(item.poster_url || item.afis_url || '').trim();
-    return raw || TMDB_POSTER_FALLBACK;
+    if (!raw) return TMDB_POSTER_FALLBACK;
+    const path = extractTmdbPath(raw);
+    const api = getApiBaseUrl();
+    if (api && path) {
+        return `${api}/api/tmdb-image?size=w185&path=${encodeURIComponent(path)}`;
+    }
+    return raw;
 }
 
-function posterImgHtml(url, alt, className = 'card-poster-img', lazy = true) {
+function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false) {
     const src = safeImageSrc(url || TMDB_POSTER_FALLBACK);
-    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'decoding="async"';
+    const lazyAttr = lazy ? 'loading="lazy" decoding="async"' : 'loading="eager" decoding="async"';
     return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || '')}" ${lazyAttr} referrerpolicy="no-referrer" onError="this.onerror=null; this.src='${TMDB_POSTER_FALLBACK}';" />`;
+}
+
+function warmPosterProxy() {
+    if (_posterProxyWarmed) return;
+    const api = getApiBaseUrl();
+    if (!api) return;
+    _posterProxyWarmed = true;
+    const img = new Image();
+    img.referrerPolicy = 'no-referrer';
+    img.src = `${api}/api/tmdb-image?size=w92&path=${encodeURIComponent('/hjVNQA2a12OxkpDEOQTBMbKVZ1K.jpg')}`;
+}
+
+function preloadImages(urls, timeoutMs = 8000) {
+    const list = [...new Set((urls || []).filter(Boolean))];
+    if (!list.length) return Promise.resolve();
+    return new Promise((resolve) => {
+        let left = list.length;
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        list.forEach((url) => {
+            const img = new Image();
+            const one = () => {
+                left -= 1;
+                if (left <= 0) finish();
+            };
+            img.onload = one;
+            img.onerror = one;
+            img.referrerPolicy = 'no-referrer';
+            img.src = url;
+        });
+    });
 }
 
 function isMainAppVisible() {
@@ -605,6 +662,7 @@ let isTransitioning = false;
 window.enterAppFromGlobal = function(universe) {
     if (isTransitioning) return;
     isTransitioning = true;
+    warmPosterProxy();
 
     console.log("Entering universe:", universe);
     const landingPage = document.getElementById('landing-page');
@@ -1973,11 +2031,12 @@ function scheduleRenderContentCards(immediate = false) {
     }
 }
 
-function renderContentCards() {
+async function renderContentCards() {
     window._exploreNeedsRefresh = false;
     const cardsContainer = document.getElementById('cards-container');
     const resultsCountText = document.getElementById('results-count-text');
     if (!cardsContainer) return;
+    const renderToken = ++_renderCardsToken;
 
 
     const dataset = (currentUniverse === 'MOVIES') 
@@ -2239,8 +2298,6 @@ function renderContentCards() {
 
     renderExplorePagination(totalPages);
 
-    cardsContainer.innerHTML = '';
-
     // 🔴 KULLANICI UYARISI: ANLAMSIZ VE SAÇMA GİRDİDE (ÖRN: "ben malım") ENGEL VE TEMİZ UYARI METNİ
     if (isNonsenseQuery || paginatedItems.length === 0) {
         setExplorePaginationVisible(false);
@@ -2256,6 +2313,19 @@ function renderContentCards() {
         `;
         return;
     }
+
+    // Kapakları önce paralel yükle — kartlar hazır gelince birden çizilir (tek tek akmaz)
+    const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
+    if (!cardsContainer.querySelector('.media-horizontal-card')) {
+        cardsContainer.innerHTML = `
+            <div style="grid-column:1/-1;text-align:center;padding:28px 12px;color:#9ca3af;font-weight:700;">
+                Kapaklar yükleniyor…
+            </div>`;
+    }
+    await preloadImages(posterUrls, 7000);
+    if (renderToken !== _renderCardsToken) return;
+
+    cardsContainer.innerHTML = '';
 
     // 4. Kartların DOM'a Eklenmesi (çok kartta backdrop kapalı — performans)
     const showCardBackdrops = paginatedItems.length <= 12;
@@ -2274,7 +2344,7 @@ function renderContentCards() {
             <!-- ÜST BÖLÜM: AFİŞ VE SAĞ DETAYLAR -->
             <div class="card-top-row" style="position: relative; z-index: 2; padding-top: 16px;">
                 <div class="card-left-poster">
-                    ${posterImgHtml(posterSrc, item.title)}
+                    ${posterImgHtml(posterSrc, item.title, 'card-poster-img', false)}
                 </div>
                 <div class="card-right-details">
                     <h2 class="card-item-title">${escapeHtml(item.title)}</h2>
