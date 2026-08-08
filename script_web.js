@@ -141,10 +141,9 @@ function toWeservTmdbUrl(url, size) {
     const direct = toDirectTmdbUrl(url, size);
     if (!direct || !isTmdbImageHost(direct)) return '';
     const width = (size === 'w780') ? 780 : (size === 'w185' ? 185 : 342);
-    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}&output=webp`;
+    return `https://images.weserv.nl/?url=${encodeURIComponent(direct.replace(/^https?:\/\//, ''))}&w=${width}`;
 }
 
-/** Varsayılan: direkt TMDB. Yedekler onError zincirinde. */
 function optimizeTmdbPosterUrl(url) {
     const direct = toDirectTmdbUrl(url, 'w342');
     if (!direct) return url;
@@ -183,10 +182,7 @@ window.__posterImgError = function (img) {
     if (img.src !== fallback) img.src = fallback;
 };
 
-/**
- * Kart afişleri: TMDB → weserv → Render proxy → placeholder.
- * Çift sarmalama yok; & attribute kaçışı safeImageSrc ile.
- */
+/** Kart afişleri: direkt TMDB → weserv → backend proxy → placeholder */
 function posterImgHtml(url, alt, className = 'card-poster-img', lazy = false, fetchPriority = '') {
     const resolved = url || TMDB_POSTER_FALLBACK;
     const direct = toDirectTmdbUrl(resolved, 'w342') || (isTmdbImageHost(resolved) ? resolved : '');
@@ -211,89 +207,10 @@ function bindLandingHeroReady() {
     hero.addEventListener('error', markReady, { once: true });
 }
 
-/** Giriş / evren değişiminde: yükleme ekranı, kapaklar hazır olunca boya. */
-let _exploreReadyGate = false;
-
-function preloadImages(urls, timeoutMs = 3000) {
-    const list = [...new Set((urls || []).filter(Boolean))];
-    if (!list.length) return Promise.resolve();
-    return new Promise((resolve) => {
-        let left = list.length;
-        let settled = false;
-        const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve();
-        };
-        const timer = setTimeout(finish, timeoutMs);
-        list.forEach((url) => {
-            const img = new Image();
-            const one = () => {
-                left -= 1;
-                if (left <= 0) finish();
-            };
-            img.onload = one;
-            img.onerror = one;
-            img.referrerPolicy = 'no-referrer';
-            img.src = url;
-        });
-    });
-}
-
-function ensureExploreBootMask() {
-    let mask = document.getElementById('explore-boot-mask');
-    if (mask) return mask;
-    mask = document.createElement('div');
-    mask.id = 'explore-boot-mask';
-    mask.setAttribute('role', 'status');
-    mask.setAttribute('aria-live', 'polite');
-    mask.innerHTML = `
-        <div class="explore-boot-mask__card">
-            <div class="explore-boot-mask__spinner" aria-hidden="true"></div>
-            <div class="explore-boot-mask__title">Dizi / film kartları yükleniyor</div>
-            <div class="explore-boot-mask__sub">Kapaklar hazırlanıyor, hemen açılacak…</div>
-        </div>`;
-    document.body.appendChild(mask);
-    return mask;
-}
-
-function showExploreBootMask(isMovies) {
-    const mask = ensureExploreBootMask();
-    const title = mask.querySelector('.explore-boot-mask__title');
-    const sub = mask.querySelector('.explore-boot-mask__sub');
-    if (title) {
-        title.textContent = (isMovies === true)
-            ? 'Film kartları yükleniyor'
-            : (isMovies === false)
-                ? 'Dizi kartları yükleniyor'
-                : 'Dizi / film kartları yükleniyor';
-    }
-    if (sub) sub.textContent = 'Kapaklar hazırlanıyor, hemen açılacak…';
-    mask.classList.add('is-visible');
-}
-
-function hideExploreBootMask() {
-    const mask = document.getElementById('explore-boot-mask');
-    if (mask) mask.classList.remove('is-visible');
-}
-
-async function waitExploreReadyBlank(urls, isMovies) {
-    const minMs = 2000;
-    const maxMs = 3000;
-    const started = Date.now();
-    showExploreBootMask(isMovies);
-    // Aynı birincil URL'leri ısıt (paint ile birebir aynı — cache isabeti)
-    await preloadImages(urls, maxMs);
-    const left = minMs - (Date.now() - started);
-    if (left > 0) await new Promise((r) => setTimeout(r, left));
-}
-
 /** Evren değişince eski kartları anında sil; async render yarışını iptal et. */
 function resetExploreCardsForUniverseSwitch() {
     _renderCardsToken += 1;
     currentPage = 1;
-    _exploreReadyGate = true;
     if (_renderCardsDebounceTimer) {
         clearTimeout(_renderCardsDebounceTimer);
         _renderCardsDebounceTimer = null;
@@ -302,7 +219,6 @@ function resetExploreCardsForUniverseSwitch() {
     const resultsCountText = document.getElementById('results-count-text');
     if (cardsContainer) cardsContainer.innerHTML = '';
     if (resultsCountText) resultsCountText.textContent = '';
-    showExploreBootMask(currentUniverse === 'MOVIES');
 }
 
 function isMainAppVisible() {
@@ -889,9 +805,6 @@ window.enterAppFromGlobal = function(universe) {
         }
 
         stopMatrixCanvas();
-        // Yükleme ekranı + kapak preload; hazır olunca kartlar toptan gelir
-        _exploreReadyGate = true;
-        showExploreBootMask(universe === 'MOVIES');
         try {
             scheduleRenderContentCards(true);
             window._libraryNeedsRefresh = true;
@@ -1059,13 +972,19 @@ function setUniverse(universe) {
     currentFavPage = 1;
     currentLibraryPage = 1;
     currentLibrarySearchQuery = '';
-    window.BACKEND_REC_CACHE = {};
     window.CURRENT_REC_STATE = { visible: [], overflowQueue: [], isMovie: (universe === 'MOVIES') };
     window._exploreNeedsRefresh = true;
     window._libraryNeedsRefresh = true;
     window._favoritesNeedsRefresh = true;
+    // Evren değişince bellek cache temizlenir; kalıcı cache evren bazlı kalır
+    if (typeof window.BACKEND_REC_CACHE === 'object' && window.BACKEND_REC_CACHE) {
+        Object.keys(window.BACKEND_REC_CACHE).forEach((k) => { delete window.BACKEND_REC_CACHE[k]; });
+    }
     const aiResultsContainer = document.getElementById('ai-results-container');
-    if (aiResultsContainer) aiResultsContainer.innerHTML = '';
+    if (aiResultsContainer) {
+        aiResultsContainer.innerHTML = '';
+        delete aiResultsContainer.dataset.aiRecFp;
+    }
 
     const libSearchInput = document.getElementById('input-library-search');
     if (libSearchInput) {
@@ -2187,7 +2106,7 @@ function passesExploreSidebarFilters(item, opts) {
 }
 
 let _renderCardsDebounceTimer = null;
-const RENDER_CARDS_DEBOUNCE_MS = 400;
+const RENDER_CARDS_DEBOUNCE_MS = 0;
 
 function scheduleRenderContentCards(immediate = false) {
     if (_renderCardsDebounceTimer) {
@@ -2491,17 +2410,12 @@ function renderContentCards() {
     // Evren değiştiyse bu render'ı at (eski film/dizi listesi karışmasın)
     if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
 
-    // 4. Giriş/evren değişiminde: 2–3 sn boş bekleyip kapaklar hazır olunca toptan boya
+    // 4. Kartları anında toptan boya
     const showCardBackdrops = false;
     const isMoviesView = universeSnapshot === 'MOVIES';
-    const useReadyGate = _exploreReadyGate;
-    _exploreReadyGate = false;
 
     const paintCards = () => {
-        if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) {
-            hideExploreBootMask();
-            return;
-        }
+        if (renderToken !== _renderCardsToken || universeSnapshot !== currentUniverse) return;
         const fragment = document.createDocumentFragment();
         paginatedItems.forEach((item, cardIdx) => {
         const card = document.createElement('div');
@@ -2587,23 +2501,7 @@ function renderContentCards() {
     });
         cardsContainer.innerHTML = '';
         cardsContainer.appendChild(fragment);
-        // DOM'daki afişler decode olana kadar maskeyi tut (placeholder flaşı olmasın)
-        const imgs = [...cardsContainer.querySelectorAll('.card-poster-img')];
-        Promise.all(imgs.map((img) => {
-            if (img.complete && img.naturalWidth > 0) return Promise.resolve();
-            return img.decode().catch(() => new Promise((res) => {
-                img.addEventListener('load', res, { once: true });
-                img.addEventListener('error', res, { once: true });
-            }));
-        })).finally(() => hideExploreBootMask());
     };
-
-    if (useReadyGate) {
-        cardsContainer.innerHTML = '';
-        const posterUrls = paginatedItems.map((item) => resolvePosterUrl(item));
-        waitExploreReadyBlank(posterUrls, isMoviesView).then(paintCards);
-        return;
-    }
 
     paintCards();
 }
@@ -2620,6 +2518,7 @@ function setupTabNavigation() {
     if (typeof window._exploreNeedsRefresh === 'undefined') window._exploreNeedsRefresh = true;
     if (typeof window._libraryNeedsRefresh === 'undefined') window._libraryNeedsRefresh = true;
     if (typeof window._favoritesNeedsRefresh === 'undefined') window._favoritesNeedsRefresh = true;
+    if (typeof window._aiRecNeedsRefresh === 'undefined') window._aiRecNeedsRefresh = true;
 
     navItems.forEach(item => {
         item.addEventListener('click', () => {
@@ -3977,6 +3876,7 @@ function addToLibraryFromExplore(itemId) {
     });
 
     showToast(`✅ <strong>${foundItem.title}</strong> kitaplığınıza eklendi!`, 1800);
+    markAIRecNeedsRefresh();
     window.BACKEND_REC_CACHE = {};
     window._libraryNeedsRefresh = true;
     if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
@@ -4393,6 +4293,7 @@ function removeFromLibrary(itemId) {
             saveUserData(CURRENT_USER);
         }
         showToast(`🗑️ Yapım kitaplıktan silindi.`, 1800);
+        markAIRecNeedsRefresh();
         window.BACKEND_REC_CACHE = {};
         if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
         updateLibraryUI();
@@ -4571,6 +4472,7 @@ function handleSaveManualEntry() {
     });
 
     showToast(`✅ <strong>${foundItem.title}</strong> kitaplığınıza (${finalStatus}) eklendi!`, 2200);
+    markAIRecNeedsRefresh();
     window.BACKEND_REC_CACHE = {};
     if (typeof clearPersistedAIRecCache === 'function') clearPersistedAIRecCache(currentUniverse);
     if (inputSearch) inputSearch.value = '';
@@ -5170,7 +5072,7 @@ function expandQueryText(query) {
     return expanded;
 }
 
-function renderAIRecommenderUI() {
+function renderAIRecommenderUI(force = false) {
     const resultsContainer = document.getElementById('ai-results-container');
     const submitBtn = document.getElementById('btn-submit-ai');
     if (!resultsContainer) return;
@@ -5184,7 +5086,8 @@ function renderAIRecommenderUI() {
         return;
     }
 
-    const activeLib = (typeof getActiveLibrary === 'function') ? (getActiveLibrary() || []) : [];
+    const snap = getAIRecLibrarySnapshot();
+    const activeLib = snap.activeLib;
     const libCount = activeLib.length;
     if (libCount < MIN_LIBRARY_FOR_AI) {
         renderLibraryMinBanner(resultsContainer, libCount, isMovie);
@@ -5194,6 +5097,20 @@ function renderAIRecommenderUI() {
 
     if (submitBtn) submitBtn.disabled = false;
 
+    // Kitaplık aynıysa ve kartlar zaten ekranda → yeniden üretme
+    if (!force && !window._aiRecNeedsRefresh) {
+        const cached = getCachedAIRecommendations(snap.fingerprint);
+        if (cached) {
+            const alreadyShown = resultsContainer.dataset.aiRecFp === snap.fingerprint
+                && resultsContainer.querySelector('.ai-recommendation-card, .media-horizontal-card');
+            if (alreadyShown) return;
+            resultsContainer.dataset.aiRecFp = snap.fingerprint;
+            renderAIRecommendationsCards(cached, '', resultsContainer, isMovie, snap.onlyEnded);
+            return;
+        }
+    }
+
+    window._aiRecNeedsRefresh = false;
     generateAIRecommendations();
 }
 
@@ -5506,6 +5423,11 @@ function renderAIRecommendationsCards(recsPayload, userQuery, container, isMovie
     });
     html += `</div>`;
     container.innerHTML = html;
+    try {
+        const snap = getAIRecLibrarySnapshot();
+        container.dataset.aiRecFp = snap.fingerprint;
+    } catch (e) { /* ignore */ }
+    window._aiRecNeedsRefresh = false;
 }
 
 function handleInstantSlotSwap(itemId, buttonEl) {
@@ -5629,18 +5551,74 @@ function getAIOnlyEndedPref() {
 function setAIOnlyEndedPref(value) {
     const username = CURRENT_USER && CURRENT_USER !== 'Kullanıcı' ? CURRENT_USER.toLowerCase() : 'guest';
     localStorage.setItem(`AI_ONLY_ENDED_${username}`, value ? '1' : '0');
+    markAIRecNeedsRefresh();
     window.BACKEND_REC_CACHE = {};
     window.CURRENT_REC_STATE = { visible: [], overflowQueue: [], isMovie: currentUniverse === 'MOVIES' };
     clearPersistedAIRecCache(currentUniverse);
 }
 
-/** Kitaplık parmak izi — değişince AI tavsiye cache geçersiz */
+/** Kitaplık parmak izi — yalnızca eklenen/çıkarılan yapım ID'leri (puan/durum değişimi cache'i bozmaz) */
 function buildAIRecLibraryFingerprint(libraryItemsPayload, onlyEnded) {
-    const libPart = (libraryItemsPayload || [])
-        .map(x => `${x.id}:${Number(x.weight) || 1}:${Number(x.user_rating) || 0}`)
+    const ids = (libraryItemsPayload || [])
+        .map(x => String(x.id))
         .sort()
-        .join('_');
-    return `v2_${currentUniverse}_${onlyEnded ? 1 : 0}_${libPart}`;
+        .join('|');
+    return `v3_${currentUniverse}_${onlyEnded ? 1 : 0}_${ids}`;
+}
+
+function getAIRecLibrarySnapshot() {
+    const onlyEnded = currentUniverse === 'MOVIES' ? false : getAIOnlyEndedPref();
+    const activeLib = (typeof getActiveLibrary === 'function') ? (getActiveLibrary() || []) : [];
+    const likedIds = currentUniverse === 'MOVIES' ? (LIKED_MOVIES_IDS || []) : (LIKED_SERIES_IDS || []);
+    const libraryItemsPayload = activeLib.map(item => {
+        let weight = 1.0;
+        const isFav = USER_FAVORITES.includes(item.id);
+        const isLiked = likedIds.includes(item.id);
+        const userRating = Number(item.user_rating || 0);
+        if (isFav) weight = 1.3;
+        else if (isLiked) weight = 1.5;
+        else if (item.status && String(item.status).includes('İzledim')) weight = 1.25;
+        else if (item.status && String(item.status).includes('İzliyorum')) weight = 0.7;
+        else if (item.status && String(item.status).includes('Yarıda')) weight = -0.6;
+        if (userRating >= 5) weight = Math.max(weight, 1.65);
+        else if (userRating >= 4) weight = Math.max(weight, 1.45);
+        else if (userRating >= 3) weight = Math.max(weight, 1.15);
+        else if (userRating === 2) weight = Math.min(weight > 0 ? weight : 1, 0.75);
+        else if (userRating === 1) weight = -0.35;
+        return {
+            id: item.id,
+            weight,
+            title: item.title,
+            status: item.status,
+            user_rating: userRating,
+            liked: isLiked,
+            favorite: isFav
+        };
+    });
+    return {
+        activeLib,
+        onlyEnded,
+        libraryItemsPayload,
+        fingerprint: buildAIRecLibraryFingerprint(libraryItemsPayload, onlyEnded)
+    };
+}
+
+function getCachedAIRecommendations(fingerprint) {
+    if (typeof window.BACKEND_REC_CACHE === 'undefined') window.BACKEND_REC_CACHE = {};
+    let data = window.BACKEND_REC_CACHE[fingerprint];
+    if (data && data !== 'LOADING' && data !== 'FALLBACK') return data;
+    const persisted = loadPersistedAIRecCache(fingerprint);
+    if (persisted) {
+        window.BACKEND_REC_CACHE[fingerprint] = persisted;
+        return persisted;
+    }
+    return null;
+}
+
+function markAIRecNeedsRefresh() {
+    window._aiRecNeedsRefresh = true;
+    const aiBox = document.getElementById('ai-results-container');
+    if (aiBox) delete aiBox.dataset.aiRecFp;
 }
 
 function getAIRecPersistStorageKey() {
@@ -5804,20 +5782,19 @@ function generateAIRecommendations() {
     if (!resultsContainer) return;
 
     const isMovie = (currentUniverse === 'MOVIES');
-    const activeLibEarly = (typeof getActiveLibrary === 'function') ? (getActiveLibrary() || []) : [];
+    syncAIOngoingPrefUI();
+
+    const userQuery = '';
+    const snap = getAIRecLibrarySnapshot();
+    const { activeLib: activeLibEarly, onlyEnded, libraryItemsPayload, fingerprint: recFingerprint } = snap;
+    const includeOngoing = !onlyEnded;
+
     if (activeLibEarly.length < MIN_LIBRARY_FOR_AI) {
         renderLibraryMinBanner(resultsContainer, activeLibEarly.length, isMovie);
         const submitBtn = document.getElementById('btn-submit-ai');
         if (submitBtn) submitBtn.disabled = true;
         return;
     }
-
-    syncAIOngoingPrefUI();
-
-    // Tema arama metni kaldırıldı — öneriler yalnızca kitaplık/favori profiline göre
-    const userQuery = '';
-    const onlyEnded = isMovie ? false : getAIOnlyEndedPref();
-    const includeOngoing = !onlyEnded;
 
     const dataset = isMovie 
         ? ((typeof REAL_MOVIES_DATA !== 'undefined') ? REAL_MOVIES_DATA : SAMPLE_MOVIES)
@@ -5827,49 +5804,25 @@ function generateAIRecommendations() {
     const hiddenIds = isMovie ? (HIDDEN_MOVIES_IDS || []) : (HIDDEN_SERIES_IDS || []);
     const likedIds = isMovie ? (LIKED_MOVIES_IDS || []) : (LIKED_SERIES_IDS || []);
 
-    const libraryItemsPayload = activeLib.map(item => {
-        let weight = 1.0;
-        const isFav = USER_FAVORITES.includes(item.id);
-        const isLiked = likedIds.includes(item.id);
-        const userRating = Number(item.user_rating || 0);
-
-        if (isFav) weight = 1.3;
-        else if (isLiked) weight = 1.5;
-        else if (item.status && String(item.status).includes('İzledim')) weight = 1.25;
-        else if (item.status && String(item.status).includes('İzliyorum')) weight = 0.7;
-        else if (item.status && String(item.status).includes('Yarıda')) weight = -0.6;
-
-        if (userRating >= 5) weight = Math.max(weight, 1.65);
-        else if (userRating >= 4) weight = Math.max(weight, 1.45);
-        else if (userRating >= 3) weight = Math.max(weight, 1.15);
-        else if (userRating === 2) weight = Math.min(weight > 0 ? weight : 1, 0.75);
-        else if (userRating === 1) weight = -0.35;
-
-        return {
-            id: item.id,
-            weight,
-            title: item.title,
-            status: item.status,
-            user_rating: userRating,
-            liked: isLiked,
-            favorite: isFav
-        };
-    });
-
     if (typeof window.BACKEND_REC_CACHE === 'undefined') {
         window.BACKEND_REC_CACHE = {};
     }
-    const recFingerprint = buildAIRecLibraryFingerprint(libraryItemsPayload, onlyEnded);
     const recCacheKey = recFingerprint;
     let recBackendData = window.BACKEND_REC_CACHE[recCacheKey];
 
-    // Kitaplık değişmediyse F5 / yeniden girişte API'yi tekrar çağırma
-    if (recBackendData === undefined) {
+    if (recBackendData === undefined || recBackendData === 'FALLBACK') {
         const persisted = loadPersistedAIRecCache(recFingerprint);
         if (persisted) {
             window.BACKEND_REC_CACHE[recCacheKey] = persisted;
             recBackendData = persisted;
         }
+    }
+
+    if (recBackendData && recBackendData !== 'LOADING' && recBackendData !== 'FALLBACK') {
+        resultsContainer.dataset.aiRecFp = recFingerprint;
+        renderAIRecommendationsCards(recBackendData, userQuery, resultsContainer, isMovie, onlyEnded);
+        window._aiRecNeedsRefresh = false;
+        return;
     }
 
     if (recBackendData === undefined || recBackendData === 'LOADING') {
@@ -5901,23 +5854,17 @@ function generateAIRecommendations() {
                     <span>🧠 Yapay Zeka Öneri Motoru Arıyor...</span>
                 </div>
                 <div style="font-size: 0.92rem; color: #c084fc; font-weight: 700; margin-top: 8px;">
-                    "${userQuery || 'Kişiselleştirilmiş İzleme Tercihleriniz'}" temasına uygun adaylar analiz ediliyor...
+                    Kişiselleştirilmiş izleme tercihleriniz analiz ediliyor...
                 </div>
                 <div style="font-size: 0.82rem; color: #9ca3af; margin-top: 8px;">
-                    ✨ Zevk profiliniz ve arama niyetiniz eşleştiriliyor. Lütfen bekleyin.
+                    ✨ Zevk profiliniz eşleştiriliyor. Lütfen bekleyin.
                 </div>
             </div>
         `;
         return;
     }
 
-    if (recBackendData && recBackendData !== 'LOADING' && recBackendData !== 'FALLBACK') {
-        renderAIRecommendationsCards(recBackendData, userQuery, resultsContainer, isMovie, onlyEnded);
-        return;
-    }
-
-
-    // 1. AŞAMA: İLERİ SEVİYE SİNONİM VE SÖZCÜK GENİŞLETME (RETRIEVAL)
+    // FALLBACK: yerel motor (API başarısız) — sonuç kalıcı cache'e yazılır
     const expandedQuery = expandQueryText(userQuery);
     const queryTokens = expandedQuery.split(/\s+/).filter(w => w.length > 2);
     const libraryIds = new Set(activeLib.map(i => i && i.id).filter(Boolean));
@@ -6189,10 +6136,13 @@ function generateAIRecommendations() {
         if (typeof recFingerprint !== 'undefined') {
             savePersistedAIRecCache(recFingerprint, fallbackPayload);
         }
+        resultsContainer.dataset.aiRecFp = recFingerprint;
+        window._aiRecNeedsRefresh = false;
     } catch (e) { /* ignore */ }
 }
 
 function forceRefreshAIRecommendations() {
+    markAIRecNeedsRefresh();
     window.BACKEND_REC_CACHE = {};
     clearPersistedAIRecCache(currentUniverse);
     generateAIRecommendations();
