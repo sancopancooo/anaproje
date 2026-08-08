@@ -298,7 +298,6 @@
                             <option value="Amazon Prime">Amazon Prime</option>
                             <option value="Disney Plus">Disney Plus</option>
                             <option value="HBO / Max">HBO / Max</option>
-                            <option value="Apple TV+">Apple TV+</option>
                         </select>
                     </div>
 
@@ -720,11 +719,11 @@
 
                             <!-- FÜZYON SONUÇ ALANI (anlık hesap) -->
                             <div id="fusion-results-wrapper" style="display: none; flex-direction: column; gap: 20px; margin-top: 15px;">
-                                <div class="fav-accordion-header" onclick="toggleFusionAccordion()" style="background: rgba(236, 72, 153, 0.15); border: 1px solid #ec4899; padding: 14px 20px; border-radius: 12px; font-size: 1.1rem; font-weight: 800; color: #fff; justify-content: space-between;">
-                                    <span>🎉 İkinizin Ortak Zevkine En Uygun Öneriler</span>
-                                    <i id="arrow-fusion-accordion" class="fa-solid fa-chevron-down"></i>
+                                <div class="fav-accordion-header" onclick="toggleFusionAccordion()" style="background: rgba(236, 72, 153, 0.15); border: 1px solid #ec4899; padding: 14px 20px; border-radius: 12px; font-size: 1.1rem; font-weight: 800; color: #fff; justify-content: space-between; cursor: pointer;">
+                                    <span>🎉 İkinizin Ortak Zevkine En Uygun Öneriler — görmek için tıkla</span>
+                                    <i id="arrow-fusion-accordion" class="fa-solid fa-chevron-right"></i>
                                 </div>
-                                <div id="fusion-cards-grid" class="fusion-cards-grid" style="display: grid; grid-template-columns: 1fr; gap: 20px;"></div>
+                                <div id="fusion-cards-grid" class="fusion-cards-grid" style="display: none; grid-template-columns: 1fr; gap: 20px;"></div>
                             </div>
                         </div>
 
@@ -1052,6 +1051,6 @@
     <!-- Gerçek Dizi & Film Veri Deposu -->
     <script src="data_store.js?v=85"></script>
     <!-- Uygulama Scripti -->
-    <script src="script_web.js?v=109"></script>
+    <script src="script_web.js?v=110"></script>
 </body>
 </html>

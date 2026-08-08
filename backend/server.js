@@ -9,6 +9,8 @@ import {
   lexicalScore,
   passesHardGate,
   tokenizeQuery,
+  extractRequiredGenres,
+  itemMatchesRequiredGenres,
   HYBRID_VECTOR_WEIGHT,
   HYBRID_LEXICAL_WEIGHT,
   MIN_HYBRID_SCORE,
@@ -93,6 +95,7 @@ function getItemSearchMeta(itemId, mediaType) {
 
 function hybridRank(query, mediaType, rows, queryVec) {
   const themes = detectThemes(query);
+  const requiredGenres = extractRequiredGenres(query);
   const queryTokens = tokenizeQuery(query);
   const scored = [];
 
@@ -107,6 +110,7 @@ function hybridRank(query, mediaType, rows, queryVec) {
     const title = meta.title || r.item_title || '';
 
     if (!passesHardGate(meta.body, title, themes)) continue;
+    if (!itemMatchesRequiredGenres(meta.body, requiredGenres)) continue;
 
     const lex = lexicalScore(meta.body, title, themes, queryTokens);
     const hybrid = (HYBRID_VECTOR_WEIGHT * cosine) + (HYBRID_LEXICAL_WEIGHT * lex);

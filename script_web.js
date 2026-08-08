@@ -475,11 +475,15 @@ const FAV_PER_PAGE = 5;
 /* ==========================================================================
    📌 BAŞLIK 2: MATRIX CANVAS ANIMASYONU
    ========================================================================== */
+let matrixCanvasTimer = null;
+
 function initMatrixCanvas() {
     const canvas = document.getElementById('matrix-canvas');
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
 
+    if (matrixCanvasTimer) return;
+
+    const ctx = canvas.getContext('2d');
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
@@ -506,7 +510,18 @@ function initMatrixCanvas() {
         }
     }
 
-    setInterval(drawMatrix, 40);
+    matrixCanvasTimer = setInterval(drawMatrix, 40);
+}
+
+function stopMatrixCanvas() {
+    if (matrixCanvasTimer) {
+        clearInterval(matrixCanvasTimer);
+        matrixCanvasTimer = null;
+    }
+    const canvas = document.getElementById('matrix-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
 
@@ -579,9 +594,10 @@ window.enterAppFromGlobal = function(universe) {
             setTimeout(() => mainApp.classList.remove('portal-entry'), 850);
         }
 
+        stopMatrixCanvas();
         try {
-            renderContentCards();
-            updateLibraryUI();
+            scheduleRenderContentCards(true);
+            window._libraryNeedsRefresh = true;
         } catch (err) {
             console.warn("Render error:", err);
         }
@@ -611,8 +627,6 @@ function setupUniverseSelection() {
     if (btnSwitch) {
         btnSwitch.addEventListener('click', () => {
             setUniverse((currentUniverse === 'MOVIES') ? 'SERIES' : 'MOVIES');
-            renderContentCards();
-            updateLibraryUI();
         });
     }
 }
@@ -621,6 +635,49 @@ function setupUniverseSelection() {
 /* ==========================================================================
    📌 BAŞLIK 4: TEMATİK DÖNÜŞÜM VE EVREN YÖNETİMİ
    ========================================================================== */
+/** Keşfet yan paneli varsayılanları — evren değişince sıfırlanır */
+function resetExploreSidebarFilters() {
+    const sliderRating = document.getElementById('slider-min-rating');
+    const valRating = document.getElementById('val-min-rating');
+    if (sliderRating) sliderRating.value = '5.0';
+    if (valRating) valRating.textContent = '5.0';
+
+    const sliderSensitivity = document.getElementById('slider-search-sensitivity');
+    const valSensitivity = document.getElementById('val-search-sensitivity');
+    if (sliderSensitivity) sliderSensitivity.value = '65';
+    if (valSensitivity) valSensitivity.textContent = '65';
+
+    const selectSort = document.getElementById('select-sort');
+    if (selectSort) selectSort.value = 'AI';
+
+    const selectGenre = document.getElementById('select-genre');
+    if (selectGenre) selectGenre.value = 'ALL';
+
+    const selectPlatform = document.getElementById('select-platform');
+    if (selectPlatform) selectPlatform.value = 'ALL';
+
+    const selectLanguage = document.getElementById('select-language');
+    if (selectLanguage) selectLanguage.value = 'ALL';
+
+    const inputMinYear = document.getElementById('input-min-year');
+    if (inputMinYear) inputMinYear.value = '1990';
+
+    const inputMaxSeasons = document.getElementById('input-max-seasons');
+    if (inputMaxSeasons) inputMaxSeasons.value = '20';
+
+    const inputMinVotes = document.getElementById('input-min-votes');
+    if (inputMinVotes) inputMinVotes.value = '100';
+
+    const selectPerPage = document.getElementById('select-per-page');
+    if (selectPerPage) selectPerPage.value = '30';
+
+    const checkOnlyEnded = document.getElementById('check-only-ended');
+    if (checkOnlyEnded) checkOnlyEnded.checked = false;
+
+    const inputSearch = document.getElementById('input-search');
+    if (inputSearch) inputSearch.value = '';
+}
+
 function setUniverse(universe) {
     closeAssistantModal();
     currentUniverse = universe;
@@ -633,6 +690,7 @@ function setUniverse(universe) {
     if (aiSearchReset) aiSearchReset.value = '';
     COMMITTED_AI_SEARCH_QUERY = '';
     COMMITTED_SIDEBAR_SEARCH_QUERY = '';
+    resetExploreSidebarFilters();
     if (typeof window.BACKEND_SEARCH_CACHE !== 'undefined') {
         window.BACKEND_SEARCH_CACHE = {};
     }
@@ -724,8 +782,12 @@ function setUniverse(universe) {
             : 'Kitaplığında dizi ara...';
     }
 
-    renderContentCards();
-    updateLibraryUI();
+    scheduleRenderContentCards(true);
+    if (isLibraryTabActive()) {
+        updateLibraryUI();
+    } else {
+        window._libraryNeedsRefresh = true;
+    }
     renderFavorites();
     updateVersusUI();
     renderSocialUI();
@@ -1052,6 +1114,118 @@ function expandQueryTokens(tokens) {
     return [...expanded];
 }
 
+/** Arama cümlesinde açıkça geçen türler — hepsi yapımda olmalı (dram + zombi vb.) */
+const SEARCH_QUERY_GENRE_ALIASES = {
+    dram: ['dram', 'drama'],
+    gizem: ['gizem', 'mystery'],
+    komedi: ['komedi', 'comedy'],
+    korku: ['korku', 'horror'],
+    gerilim: ['gerilim', 'thriller'],
+    aksiyon: ['aksiyon', 'action'],
+    animasyon: ['animasyon', 'animation'],
+    belgesel: ['belgesel', 'documentary'],
+    romantik: ['romantik', 'romance'],
+    suc: ['suç', 'suc', 'crime'],
+    fantastik: ['fantastik', 'fantasy'],
+    bilimkurgu: ['bilim kurgu', 'bilimkurgu', 'sci-fi', 'scifi']
+};
+
+/** Bağlam kelimeleri — sorguda varsa yapım metninde de olmalı (okulda geçen gizem vb.) */
+const SEARCH_QUERY_ANCHOR_LEXICON = {
+    okul: ['okul', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'universite', 'campus', 'öğrenci', 'ogrenci', 'sınıf', 'sinif', 'akademi', 'yurt', 'high school', 'boarding school'],
+    zombi: ['zombi', 'zombie', 'ölü yürüyen', 'walking dead', 'enfekte', 'infected', 'walkers', 'salgın'],
+    hapishane: ['hapishane', 'cezaevi', 'prison', 'mahkum', 'koğuş', 'parmaklık', 'inmate'],
+    ortacag: ['ortaçağ', 'ortacag', 'medieval', 'feodal', 'feudal', 'middle ages', 'şövalye', 'sovalye', 'viking']
+};
+
+const SEARCH_ANCHOR_QUERY_TRIGGERS = {
+    okul: ['okul', 'okulda', 'school', 'kampüs', 'kampus', 'lise', 'üniversite', 'universite', 'campus'],
+    zombi: ['zombi', 'zombie', 'ölü yürüyen'],
+    hapishane: ['hapishane', 'cezaevi', 'prison', 'mahkum'],
+    ortacag: ['ortaçağ', 'ortacag', 'medieval', 'feodal', 'feudal']
+};
+
+function normalizeSearchText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/ı/g, 'i').replace(/ğ/g, 'g').replace(/ü/g, 'u')
+        .replace(/ş/g, 's').replace(/ö/g, 'o').replace(/ç/g, 'c');
+}
+
+function extractRequiredGenresFromSearchQuery(query) {
+    const q = String(query || '').toLowerCase();
+    const qNorm = normalizeSearchText(q);
+    const required = [];
+    Object.entries(SEARCH_QUERY_GENRE_ALIASES).forEach(([genreKey, aliases]) => {
+        const hit = aliases.some(alias => {
+            const a = alias.toLowerCase();
+            return q.includes(a) || qNorm.includes(normalizeSearchText(a));
+        });
+        if (hit) required.push(genreKey);
+    });
+    return required;
+}
+
+function extractRequiredAnchorsFromSearchQuery(query) {
+    const q = String(query || '').toLowerCase();
+    const qNorm = normalizeSearchText(q);
+    const anchors = [];
+    Object.entries(SEARCH_ANCHOR_QUERY_TRIGGERS).forEach(([anchorKey, triggers]) => {
+        const hit = triggers.some(tr => q.includes(tr) || qNorm.includes(normalizeSearchText(tr)));
+        if (hit) anchors.push(anchorKey);
+    });
+    return anchors;
+}
+
+function getItemSearchableText(item) {
+    const genresStr = (Array.isArray(item.genres) ? item.genres.join(' ') : String(item.genres || '')).toLowerCase();
+    const whyStr = Array.isArray(item.why_watch) ? item.why_watch.join(' ') : String(item.why_watch || '');
+    const platStr = item.platform || (Array.isArray(item.platforms) ? item.platforms.join(' ') : (item.platforms || ''));
+    return normalizeSearchText([
+        item.title, item.summary, genresStr, item.duo, item.cast, item.director,
+        item.yonetmen, item.oyuncular, whyStr, platStr, item.keywords
+    ].filter(Boolean).join(' '));
+}
+
+function itemMatchesSearchGenreRequirements(item, requiredGenres) {
+    if (!requiredGenres || !requiredGenres.length) return true;
+    const text = getItemSearchableText(item);
+    return requiredGenres.every(g => text.includes(g));
+}
+
+function itemMatchesSearchAnchorRequirements(item, requiredAnchors) {
+    if (!requiredAnchors || !requiredAnchors.length) return true;
+    const text = getItemSearchableText(item);
+    const titleLow = String(item.title || '').toLowerCase();
+
+    return requiredAnchors.every(anchorKey => {
+        const tokens = SEARCH_QUERY_ANCHOR_LEXICON[anchorKey] || [];
+        if (tokens.some(t => text.includes(normalizeSearchText(t)))) return true;
+
+        // Zombi: "Kingdom" (Kore) evet, "The Last Kingdom" hayır
+        if (anchorKey === 'zombi') {
+            if (/last kingdom/.test(titleLow)) return false;
+            if (titleLow === 'kingdom' || titleLow === 'krallik' || titleLow === 'krallık') {
+                return text.includes('zombi') || text.includes('zombie');
+            }
+        }
+        return false;
+    });
+}
+
+/** Yerel + backend arama sonuçlarında niyet filtreleri */
+function applySearchIntentFilters(query, items) {
+    if (!query || !Array.isArray(items) || !items.length) return items || [];
+    const requiredGenres = extractRequiredGenresFromSearchQuery(query);
+    const requiredAnchors = extractRequiredAnchorsFromSearchQuery(query);
+    if (!requiredGenres.length && !requiredAnchors.length) return items;
+
+    return items.filter(item =>
+        itemMatchesSearchGenreRequirements(item, requiredGenres)
+        && itemMatchesSearchAnchorRequirements(item, requiredAnchors)
+    );
+}
+
 function processNaturalLanguageQuery(rawQuery, dataset) {
     if (!rawQuery) return { isNonsense: false, matches: dataset };
 
@@ -1219,9 +1393,7 @@ function processNaturalLanguageQuery(rawQuery, dataset) {
     else if (maxRaw >= 4.0)  maxDisplayPct = 62; // çok zayıf     → max %62
     else                     maxDisplayPct = 50; // alakasız      → max %50
 
-    return {
-        isNonsense: false,
-        matches: scoredItems.map((x) => {
+    let matches = scoredItems.map((x) => {
             const mapped = { ...x.item };
             if (x.rawScore >= 900) {
                 mapped.aiMatchScore = x.rawScore >= 990 ? 99 : (x.rawScore >= 950 ? 97 : 94);
@@ -1234,7 +1406,13 @@ function processNaturalLanguageQuery(rawQuery, dataset) {
             // Not burada doldurulmaz — capExploreAiReasons en fazla 10'a yazar
             mapped.aiReason = '';
             return mapped;
-        })
+        });
+
+    matches = applySearchIntentFilters(rawQuery, matches);
+
+    return {
+        isNonsense: matches.length === 0,
+        matches
     };
 }
 
@@ -1384,6 +1562,7 @@ function enrichMatchesWithThemeHints(query, dataset, existingMatches) {
 
         for (const th of themes) {
             if (Array.isArray(th.excludeIf) && th.excludeIf.some(ex => full.includes(ex))) continue;
+            if (/last kingdom/.test(titleLow) && (th.id === 'zombi_apokalips' || (th.triggers || []).some(t => t.includes('zombi')))) continue;
 
             const titleHit = (th.titleHints || []).some(h => {
                 const hint = String(h || '').toLowerCase();
@@ -1682,14 +1861,31 @@ function passesExploreSidebarFilters(item, opts) {
             if (!pStr.includes('amazon') && !pStr.includes('prime')) return false;
         } else if (selectedPlatform === 'Disney Plus') {
             if (!pStr.includes('disney')) return false;
-        } else if (selectedPlatform === 'Apple TV+') {
-            if (!pStr.includes('apple')) return false;
         } else if (!pStr.includes(selectedPlatform.toLowerCase())) {
             return false;
         }
     }
 
     return true;
+}
+
+let _renderCardsDebounceTimer = null;
+const RENDER_CARDS_DEBOUNCE_MS = 250;
+
+function scheduleRenderContentCards(immediate = false) {
+    if (_renderCardsDebounceTimer) {
+        clearTimeout(_renderCardsDebounceTimer);
+        _renderCardsDebounceTimer = null;
+    }
+    const run = () => {
+        _renderCardsDebounceTimer = null;
+        renderContentCards();
+    };
+    if (immediate) {
+        run();
+    } else {
+        _renderCardsDebounceTimer = setTimeout(run, RENDER_CARDS_DEBOUNCE_MS);
+    }
 }
 
 function renderContentCards() {
@@ -1897,6 +2093,9 @@ function renderContentCards() {
 
         // AI eşleşme notu: en fazla 10 yapım (maliyet / gürültü)
         filteredData = capExploreAiReasons(filteredData, activeSearchQuery, MAX_AI_MATCH_NOTES);
+
+        // Niyet filtreleri: okul+gizem, zombi+dram vb. — alakasız sonuçları ele
+        filteredData = applySearchIntentFilters(activeSearchQuery, filteredData);
     }
 
     // Ana 4 platform (Netflix / Amazon / Disney / HBO) varsayılan listede hafif öne alınır
@@ -2165,7 +2364,7 @@ function setupFilterListeners() {
         window._exploreNeedsRefresh = true;
     }
 
-    function triggerSearch(forceCommit) {
+    function triggerSearch(forceCommit, immediateRender) {
         const aiEl = document.getElementById('ai-search-text-input');
         const sideEl = document.getElementById('input-search');
         const typingInSearch = document.activeElement === aiEl || document.activeElement === sideEl;
@@ -2179,7 +2378,7 @@ function setupFilterListeners() {
         const activeId = (document.activeElement && document.activeElement.id) || '';
         const selStart = document.activeElement && document.activeElement.selectionStart;
         const selEnd = document.activeElement && document.activeElement.selectionEnd;
-        renderContentCards();
+        scheduleRenderContentCards(immediateRender === true);
         if (activeId) {
             const el = document.getElementById(activeId);
             if (el && typeof el.focus === 'function') {
@@ -2211,7 +2410,7 @@ function setupFilterListeners() {
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    triggerSearch(true);
+                    triggerSearch(true, true);
                 }
             });
         }
@@ -2222,7 +2421,7 @@ function setupFilterListeners() {
             input.addEventListener('input', triggerSearch);
             input.addEventListener('change', triggerSearch);
             input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') triggerSearch();
+                if (e.key === 'Enter') triggerSearch(true, true);
             });
         }
     });
@@ -2235,8 +2434,13 @@ function setupFilterListeners() {
     if (checkOnlyEnded) checkOnlyEnded.addEventListener('change', triggerSearch);
 
     // FİLTRELE VE ARA BUTONU
-    if (btnApply) btnApply.addEventListener('click', () => triggerSearch(true));
-    if (btnListMedia) btnListMedia.addEventListener('click', () => triggerSearch(true));
+    if (btnApply) btnApply.addEventListener('click', () => triggerSearch(true, true));
+    if (btnListMedia) btnListMedia.addEventListener('click', () => triggerSearch(true, true));
+}
+
+function isLibraryTabActive() {
+    const tab = document.getElementById('tab-library');
+    return !!(tab && tab.classList.contains('active'));
 }
 
 
@@ -2365,11 +2569,17 @@ let chartGenreInstance = null;
 /* ==========================================================================
    📌 BAŞLIK: ÇOK SEVİYELİ (BRONZ, GÜMÜŞ, ALTIN, ELMAS) BAŞARIM ROZETLERİ MOTORU
    ========================================================================== */
-let IS_INITIAL_PAGE_LOAD = true;
-
 const UNLOCKED_BADGES_STATE = new Set(
     JSON.parse(localStorage.getItem('matrix_notified_badges') || '[]')
 );
+
+function isLibraryItemFinished(item) {
+    return item && item.status === 'İzledim';
+}
+
+function getFinishedLibraryItems(libData) {
+    return (Array.isArray(libData) ? libData : []).filter(isLibraryItemFinished);
+}
 
 function getBadgeTierInfo(cur, thresholds) {
     if (cur < thresholds.bronz) {
@@ -2425,25 +2635,27 @@ function getBadgeTierInfo(cur, thresholds) {
     }
 }
 
-function renderBadges() {
+function renderBadges(options = {}) {
+    const notifyNewBadges = options.notify === true;
     const badgesContainer = document.getElementById('badges-container');
     if (!badgesContainer) return;
 
     const libData = getActiveLibrary();
+    const finishedItems = getFinishedLibraryItems(libData);
     const isMovie = (currentUniverse === 'MOVIES');
 
-    // Metrikleri dinamik hesapla
-    const finishedCount = libData.filter(i => i.status === 'İzledim').length;
+    // Metrikleri dinamik hesapla — platform/tür rozetleri yalnızca bitirilen yapımlardan sayılır
+    const finishedCount = finishedItems.length;
     const ratedCount = libData.filter(i => (i.user_rating || 0) > 0).length;
     
     let totalWatchedMins = 0;
     libData.forEach(item => {
-        const epMins = item.ep_duration || 45;
+        const epMins = item.ep_duration || (isMovie ? 120 : 45);
         if (item.status === 'İzledim') {
             const map = item.season_episodes_map || [10];
-            const totalEps = item.total_episodes || map.reduce((a, b) => a + b, 0);
+            const totalEps = isMovie ? 1 : (item.total_episodes || map.reduce((a, b) => a + b, 0));
             totalWatchedMins += totalEps * epMins;
-        } else if (item.status === 'İzliyorum' || (item.current_episode || 0) > 0 || (item.current_season || 1) > 1) {
+        } else if (!isMovie && (item.status === 'İzliyorum' || (item.current_episode || 0) > 0 || (item.current_season || 1) > 1)) {
             const curS = item.current_season || 1;
             const curE = item.current_episode || 0;
             const map = item.season_episodes_map || [10];
@@ -2456,14 +2668,14 @@ function renderBadges() {
 
     const totalHours = Math.floor(totalWatchedMins / 60);
 
-    const netflixCount = libData.filter(i => (i.platform || '').includes('Netflix')).length;
-    const primeCount = libData.filter(i => (i.platform || '').includes('Prime') || (i.platform || '').includes('Amazon')).length;
-    const disneyCount = libData.filter(i => (i.platform || '').includes('Disney')).length;
-    const dramCount = libData.filter(i => (i.genres || []).includes('Dram')).length;
-    const sciFiCount = libData.filter(i => (i.genres || []).some(g => g.includes('Bilim') || g.includes('Gizem') || g.includes('Fantastik'))).length;
-    const comedyCount = libData.filter(i => (i.genres || []).includes('Komedi')).length;
-    const crimeCount = libData.filter(i => (i.genres || []).some(g => g.includes('Suç') || g.includes('Polisiye') || g.includes('Gerilim'))).length;
-    const gemCount = libData.filter(i => (i.votes_num && i.votes_num >= 200 && i.votes_num <= 400)).length || (finishedCount > 0 ? 1 : 0);
+    const netflixCount = finishedItems.filter(i => (i.platform || '').includes('Netflix')).length;
+    const primeCount = finishedItems.filter(i => (i.platform || '').includes('Prime') || (i.platform || '').includes('Amazon')).length;
+    const disneyCount = finishedItems.filter(i => (i.platform || '').includes('Disney')).length;
+    const dramCount = finishedItems.filter(i => (i.genres || []).includes('Dram')).length;
+    const sciFiCount = finishedItems.filter(i => (i.genres || []).some(g => g.includes('Bilim') || g.includes('Gizem') || g.includes('Fantastik'))).length;
+    const comedyCount = finishedItems.filter(i => (i.genres || []).includes('Komedi')).length;
+    const crimeCount = finishedItems.filter(i => (i.genres || []).some(g => g.includes('Suç') || g.includes('Polisiye') || g.includes('Gerilim'))).length;
+    const gemCount = finishedItems.filter(i => i.votes_num && i.votes_num >= 200 && i.votes_num <= 400).length;
 
     let rawBadgesList = [];
 
@@ -2474,9 +2686,9 @@ function renderBadges() {
                 id: "movie_total",
                 faIcon: "fa-solid fa-film",
                 title: "Sinema Perdesi",
-                desc: "İzlediğin toplam film sayısı",
+                desc: "Bitirdiğin toplam film sayısı",
                 cur: finishedCount,
-                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 100 }
+                thresholds: { bronz: 1, gumus: 15, altin: 50, elmas: 150 }
             },
             {
                 id: "movie_hours",
@@ -2484,31 +2696,31 @@ function renderBadges() {
                 title: "Maratoncu",
                 desc: "Toplam film izleme süresi (Saat)",
                 cur: totalHours,
-                thresholds: { bronz: 2, gumus: 10, altin: 50, elmas: 150 }
+                thresholds: { bronz: 10, gumus: 50, altin: 200, elmas: 600 }
             },
             {
                 id: "movie_netflix",
                 faIcon: "fa-solid fa-clapperboard",
                 title: "Netflix Sineması",
-                desc: "İzlenen Netflix filmleri",
+                desc: "Bitirdiğin Netflix filmleri",
                 cur: netflixCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_prime",
                 faIcon: "fa-solid fa-gift",
                 title: "Prime Sinema Kulübü",
-                desc: "İzlenen Amazon Prime filmleri",
+                desc: "Bitirdiğin Amazon Prime filmleri",
                 cur: primeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_disney",
                 faIcon: "fa-solid fa-fort-awesome",
                 title: "Disney Vizyonu",
-                desc: "İzlenen Disney+ filmleri",
+                desc: "Bitirdiğin Disney+ filmleri",
                 cur: disneyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_gems",
@@ -2516,39 +2728,39 @@ function renderBadges() {
                 title: "Gizli Vizyoner",
                 desc: "Popüler olmayan (200-400 oy) film yapımlarını keşfetme",
                 cur: gemCount,
-                thresholds: { bronz: 1, gumus: 3, altin: 10, elmas: 25 }
+                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 35 }
             },
             {
                 id: "movie_drama",
                 faIcon: "fa-solid fa-masks-theater",
                 title: "Dram Kuşağı",
-                desc: "İzlenen dram filmleri",
+                desc: "Bitirdiğin dram filmleri",
                 cur: dramCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_scifi",
                 faIcon: "fa-solid fa-rocket",
                 title: "Bilimkurgu Evreni",
-                desc: "İzlenen bilimkurgu/fantastik filmler",
+                desc: "Bitirdiğin bilimkurgu/fantastik filmler",
                 cur: sciFiCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_comedy",
                 faIcon: "fa-solid fa-face-laugh-beam",
                 title: "Sinema Komedisi",
-                desc: "İzlenen komedi filmleri",
+                desc: "Bitirdiğin komedi filmleri",
                 cur: comedyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_thriller",
                 faIcon: "fa-solid fa-user-secret",
                 title: "Gerilim & Suç",
-                desc: "İzlenen suç/gerilim/polisiye filmleri",
+                desc: "Bitirdiğin suç/gerilim/polisiye filmleri",
                 cur: crimeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 8, altin: 25, elmas: 60 }
             },
             {
                 id: "movie_critic",
@@ -2556,7 +2768,7 @@ function renderBadges() {
                 title: "Film Eleştirmeni",
                 desc: "Puan verdiğin film sayısı",
                 cur: ratedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
+                thresholds: { bronz: 1, gumus: 10, altin: 30, elmas: 75 }
             },
             {
                 id: "movie_social",
@@ -2590,9 +2802,9 @@ function renderBadges() {
                 id: "series_total",
                 faIcon: "fa-solid fa-desktop",
                 title: "Ekran Bağımlısı",
-                desc: "İzlediğin toplam dizi sayısı",
+                desc: "Bitirdiğin toplam dizi sayısı",
                 cur: finishedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 20, elmas: 50 }
+                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 40 }
             },
             {
                 id: "series_hours",
@@ -2600,31 +2812,31 @@ function renderBadges() {
                 title: "Koltuk Patatesi",
                 desc: "Toplam izleme süresi (Saat)",
                 cur: totalHours,
-                thresholds: { bronz: 3, gumus: 20, altin: 100, elmas: 300 }
+                thresholds: { bronz: 10, gumus: 50, altin: 250, elmas: 3500 }
             },
             {
                 id: "series_netflix",
                 faIcon: "fa-solid fa-clapperboard",
                 title: "Netflix Gurmesi",
-                desc: "İzlenen Netflix dizileri",
+                desc: "Bitirdiğin Netflix dizileri",
                 cur: netflixCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_prime",
                 faIcon: "fa-solid fa-gift",
                 title: "Prime Seçici",
-                desc: "İzlenen Prime Video dizileri",
+                desc: "Bitirdiğin Prime Video dizileri",
                 cur: primeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_disney",
                 faIcon: "fa-solid fa-fort-awesome",
                 title: "Disney Seyyahı",
-                desc: "İzlenen Disney Plus dizileri",
+                desc: "Bitirdiğin Disney Plus dizileri",
                 cur: disneyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 20 }
             },
             {
                 id: "series_gems",
@@ -2632,39 +2844,39 @@ function renderBadges() {
                 title: "Gizli Cevher Avcısı",
                 desc: "Popüler olmayan (200-400 oy) dizileri keşfetme",
                 cur: gemCount,
-                thresholds: { bronz: 1, gumus: 3, altin: 10, elmas: 20 }
+                thresholds: { bronz: 1, gumus: 2, altin: 5, elmas: 12 }
             },
             {
                 id: "series_drama",
                 faIcon: "fa-solid fa-masks-theater",
                 title: "Dram Sever",
-                desc: "İzlenen dram dizileri",
+                desc: "Bitirdiğin dram dizileri",
                 cur: dramCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_scifi",
                 faIcon: "fa-solid fa-rocket",
                 title: "Bilimkurgu Kaşifi",
-                desc: "İzlenen bilimkurgu/gizem dizileri",
+                desc: "Bitirdiğin bilimkurgu/gizem dizileri",
                 cur: sciFiCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_comedy",
                 faIcon: "fa-solid fa-face-laugh-beam",
                 title: "Kahkaha Makinesi",
-                desc: "İzlenen komedi dizileri",
+                desc: "Bitirdiğin komedi dizileri",
                 cur: comedyCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_thriller",
                 faIcon: "fa-solid fa-user-secret",
                 title: "Suç Ortağı",
-                desc: "İzlenen suç/polisiye dizileri",
+                desc: "Bitirdiğin suç/polisiye dizileri",
                 cur: crimeCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 3, altin: 8, elmas: 18 }
             },
             {
                 id: "series_social",
@@ -2680,7 +2892,7 @@ function renderBadges() {
                 title: "Kritik Zihin",
                 desc: "Puan verdiğin dizi sayısı",
                 cur: ratedCount,
-                thresholds: { bronz: 1, gumus: 5, altin: 15, elmas: 30 }
+                thresholds: { bronz: 1, gumus: 5, altin: 12, elmas: 25 }
             },
             {
                 id: "series_collector",
@@ -2710,7 +2922,7 @@ function renderBadges() {
             if (!UNLOCKED_BADGES_STATE.has(unlockKey)) {
                 UNLOCKED_BADGES_STATE.add(unlockKey);
                 localStorage.setItem('matrix_notified_badges', JSON.stringify(Array.from(UNLOCKED_BADGES_STATE)));
-                if (!IS_INITIAL_PAGE_LOAD) {
+                if (notifyNewBadges) {
                     showBadgeToast(b.title, tierInfo.tier, b.faIcon);
                 }
             }
@@ -2845,7 +3057,15 @@ function renderDistributionCharts() {
 // --------------------------------------------------------------------------
 // 4. KİTAPLIK UI GÜNCELLEMESİ VE DATALIST DOLDURMA
 // --------------------------------------------------------------------------
-function updateLibraryUI() {
+function updateLibraryUI(options = {}) {
+    const renderHeavy = options.forceHeavy === true || options.notifyBadges === true || isLibraryTabActive();
+
+    if (!renderHeavy) {
+        window._libraryNeedsRefresh = true;
+        if (CURRENT_USER) saveUserData(CURRENT_USER);
+        return;
+    }
+
     window._libraryNeedsRefresh = false;
     const statWatchTime = document.getElementById('stat-watch-time');
     const statMediaCount = document.getElementById('stat-media-count');
@@ -2930,7 +3150,7 @@ function updateLibraryUI() {
         });
     }
 
-    renderBadges();
+    renderBadges({ notify: options.notifyBadges === true });
     renderDistributionCharts();
     renderLibraryCards();
 
@@ -3421,7 +3641,7 @@ function incrementEpisode(itemId) {
     } else {
         item.status = "İzledim";
         showToast(`🎉 ${item.title} dizisinin tüm sezon ve bölümlerini tamamladınız!`, 2000);
-        updateLibraryUI();
+        updateLibraryUI({ notifyBadges: true });
         return;
     }
 
@@ -3454,7 +3674,7 @@ function markAsFinished(itemId) {
 
         showToast(`🎉 <strong>${item.title}</strong> tamamlandı! (S${item.current_season} B${item.current_episode})`, 2000);
     }
-    updateLibraryUI();
+    updateLibraryUI({ notifyBadges: true });
 }
 
 function stepSeason(itemId, delta) {
@@ -3529,6 +3749,7 @@ function saveEditPanel(itemId) {
     const starBox = document.getElementById(`star-rating-box-${itemId}`);
 
     const isMovie = (currentUniverse === 'MOVIES');
+    const previousStatus = item.status;
 
     if (!isMovie) {
         const map = item.season_episodes_map || [10];
@@ -3578,7 +3799,8 @@ function saveEditPanel(itemId) {
     if (popover) popover.style.display = 'none';
 
     showToast(`✅ <strong>${item.title}</strong> güncellendi!`, 1800);
-    updateLibraryUI();
+    const earnedNewBadge = item.status === 'İzledim' && previousStatus !== 'İzledim';
+    updateLibraryUI({ notifyBadges: earnedNewBadge });
 }
 
 function toggleFavorite(itemId) {
@@ -3990,7 +4212,7 @@ function handleSaveManualEntry() {
     if (inputSearch) inputSearch.value = '';
     const resultsDiv = document.getElementById('manual-search-results');
     if (resultsDiv) resultsDiv.style.display = 'none';
-    updateLibraryUI();
+    updateLibraryUI({ notifyBadges: finalStatus === 'İzledim' });
 }
 
 function setupLibraryListeners() {
@@ -4132,7 +4354,7 @@ function populateAssistantCheckboxes() {
     const platformListEl = document.getElementById('platform-checkbox-list');
 
     const genres = ["Aile", "Aksiyon & Macera", "Belgesel", "Animasyon", "Bilim Kurgu & Fantastik", "Bilinmiyor", "Dram", "Gizem", "Komedi", "Suç", "Vahşi Batı", "Fantastik", "Romantik", "Gerilim", "Korku", "Tarih", "Savaş", "Müzik"];
-    const platforms = ["Netflix", "Amazon Prime", "Disney Plus", "HBO / Max", "Apple TV+", "TOD TV", "BluTV", "GAIN", "Exxen", "tabii", "MUBI", "Diğer Platformlar"];
+    const platforms = ["Netflix", "Amazon Prime", "Disney Plus", "HBO / Max", "TOD TV", "BluTV", "GAIN", "Exxen", "tabii", "MUBI", "Diğer Platformlar"];
 
     if (genreListEl) {
         genreListEl.innerHTML = genres.map(g => `
@@ -4458,10 +4680,10 @@ const CONCEPT_THEMES = [
     {
         id: 'zombi_apokalips', label: 'Zombi & Apokalips', icon: '🧟', maxRecs: 2,
         triggers: ['zombi', 'zombie', 'ölü yürüyen'],
-        titleHints: ['the walking dead','fear the walking dead','last of us','the last of us','kingdom','z nation','dead set','santa clarita diet','all of us are dead','sweet home','train to busan'],
-        // 'undead' yalnız başlıkta puan vermesin diye keywords'ten çıkarıldı
+        titleHints: ['the walking dead','fear the walking dead','last of us','the last of us','z nation','dead set','santa clarita diet','all of us are dead','sweet home','train to busan'],
+        // 'kingdom' çıkarıldı — "The Last Kingdom" yanlış pozitif
         keywords: ['zombi','zombie','apokalips','kıyamet sonrası','salgın','enfekte','hayatta kalma','survivor','post-apokaliptik','outbreak','walkers'],
-        excludeIf: ['undead unluck']
+        excludeIf: ['undead unluck', 'last kingdom', 'the last kingdom']
     },
     {
         id: 'casusluk_gizem', label: 'Casusluk & Gizli Operasyonlar', icon: '🕵️', maxRecs: 3,
@@ -6691,6 +6913,7 @@ function onFusionFriendSelected() {
     // Bekleyen istek veya tamamlanmış füzyon varken formu kapat (gönderen tarafı temiz kalsın)
     const shouldHidePicks = (waiting || hasCompleted) && !FORCE_SHOW_FUSION_PICKS;
     if (shouldHidePicks) {
+        FORCE_SHOW_FUSION_PICKS = false;
         hideFusionPicksSection();
         if (newBtn) newBtn.style.display = waiting ? 'none' : 'inline-flex';
         return;
@@ -8117,6 +8340,18 @@ function toggleFusionAccordion() {
     }
 }
 
+function toggleCompletedFusionBlock(inviteId) {
+    const id = Number(inviteId);
+    if (!Number.isFinite(id)) return;
+    const grid = document.getElementById(`fusion-completed-grid-${id}`);
+    const arrow = document.getElementById(`arrow-fusion-completed-${id}`);
+    if (!grid) return;
+
+    const willExpand = grid.style.display === 'none' || !grid.style.display;
+    grid.style.display = willExpand ? 'grid' : 'none';
+    if (arrow) arrow.className = willExpand ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right';
+}
+
 function upsertCompletedFusionInvite(invite) {
     if (!invite || !invite.id) return;
     const list = Array.isArray(COMPLETED_FUSION_INVITES) ? COMPLETED_FUSION_INVITES.slice() : [];
@@ -8328,18 +8563,22 @@ async function renderCompletedFusions() {
         const ov = inv.overlap && inv.overlap.count > 0
             ? `<div style="color:#fbbf24;font-size:0.82rem;margin-bottom:8px;">⚠️ ${inv.overlap.count} ortak seçim vardı.</div>`
             : '';
+        const inviteId = Number(inv.id);
         return `
-            <div class="fusion-completed-block" data-fusion-id="${Number(inv.id)}" style="background:rgba(0,0,0,0.25);border:1px solid rgba(236,72,153,0.35);border-radius:14px;padding:16px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+            <div class="fusion-completed-block" data-fusion-id="${inviteId}" style="background:rgba(0,0,0,0.25);border:1px solid rgba(236,72,153,0.35);border-radius:14px;padding:0;overflow:hidden;">
+                <div class="fav-accordion-header" onclick="toggleCompletedFusionBlock(${inviteId})" style="background:rgba(236,72,153,0.12);border:none;border-bottom:1px solid rgba(236,72,153,0.25);padding:14px 16px;border-radius:14px 14px 0 0;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;">
                     <div style="color:#fff;font-weight:800;font-size:1rem;">
                         <i class="fa-solid fa-user-group" style="color:#ec4899;"></i>
-                        ${escapeHtml(peer || 'Arkadaş')} ile füzyon
-                        <span style="color:#9ca3af;font-weight:600;font-size:0.82rem;"> · ${isMovie ? 'Film' : 'Dizi'}</span>
+                        ${escapeHtml(peer || 'Arkadaş')} ile ortak öneriler
+                        <span style="color:#9ca3af;font-weight:600;font-size:0.82rem;"> · ${isMovie ? 'Film' : 'Dizi'} · ${items.length} sonuç — görmek için tıkla</span>
                     </div>
+                    <i id="arrow-fusion-completed-${inviteId}" class="fa-solid fa-chevron-right"></i>
                 </div>
-                ${ov}
-                <div class="fusion-cards-grid" style="display:grid;grid-template-columns:1fr;gap:16px;">
-                    ${cards}
+                <div style="padding:16px;">
+                    ${ov}
+                    <div id="fusion-completed-grid-${inviteId}" class="fusion-cards-grid" style="display:none;grid-template-columns:1fr;gap:16px;">
+                        ${cards}
+                    </div>
                 </div>
             </div>
         `;
@@ -8910,12 +9149,11 @@ document.addEventListener('DOMContentLoaded', () => {
     setupLibraryListeners();
     setupVersusSearchDropdowns();
     setupAIRecommenderListeners();
-    renderContentCards();
-    updateLibraryUI();
-    renderSocialUI();
-    renderAIRecommenderUI();
-    checkSavedSession();
+    window._libraryNeedsRefresh = true;
+    requestAnimationFrame(() => scheduleRenderContentCards(true));
     setTimeout(() => {
-        IS_INITIAL_PAGE_LOAD = false;
-    }, 1200);
+        renderSocialUI();
+        renderAIRecommenderUI();
+    }, 0);
+    checkSavedSession();
 });
